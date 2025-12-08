@@ -439,10 +439,13 @@ EOF
 generate_chroot_script() {
     log "Generating configuration script"
 
-    # Get device UUIDs for crypttab
+    # Get device UUIDs for crypttab (UUIDs of the physical LUKS partitions)
     local ROOT_LUKS_UUID=$(blkid -s UUID -o value "$(p 4)")
     local HOME_LUKS_UUID=$(blkid -s UUID -o value "$(p 5)")
     local SWAP_UUID=$(blkid -s UUID -o value "$(p 3)")
+
+    # Prepare GRUB root device mapper path
+    local GRUB_ROOT_DEVICE="/dev/mapper/root_crypt"
 
     cat > /mnt/configure.sh << SCRIPT_EOF
 #!/bin/bash
@@ -493,61 +496,68 @@ until passwd "\${USERNAME}"; do
 done
 
 log "Configuring sudo"
+mkdir -p /etc/sudoers.d
 cat > /etc/sudoers.d/wheel << EOF
 %wheel ALL=(ALL:ALL) ALL
 Defaults timestamp_timeout=0
 EOF
 chmod 440 /etc/sudoers.d/wheel
 
-# Create LUKS key file for automatic unlock
+# Create LUKS key file for automatic unlock via Dracut
 log "Creating LUKS key file"
 dd bs=1 count=64 if=/dev/urandom of=/boot/volume.key
 chmod 000 /boot/volume.key
-cryptsetup luksAddKey "$(p 4)" /boot/volume.key
+# Note: adding this key to LUKS MUST be done from the host (outside chroot) so
+# we will add the key after writing this script.
 
 log "Configuring crypttab"
+# Standardized to root_crypt to match initial setup
 cat > /etc/crypttab << EOF
-void_crypt  UUID=\${ROOT_LUKS_UUID}  /boot/volume.key  luks
-home_crypt  UUID=\${HOME_LUKS_UUID}  none             luks
-swap        UUID=\${SWAP_UUID}        /dev/urandom     swap,cipher=aes-xts-plain64,size=512
+root_crypt  UUID=\${ROOT_LUKS_UUID}  /boot/volume.key  luks
+home_crypt  UUID=\${HOME_LUKS_UUID}  none              luks
+swap        UUID=\${SWAP_UUID}       /dev/urandom      swap,cipher=aes-xts-plain64,size=512
 EOF
 
-log "Configuring dracut for LUKS+LVM boot"
+log "Configuring dracut for LUKS (NO LVM)"
 cat > /etc/dracut.conf.d/10-crypt.conf << EOF
 hostonly=yes
 hostonly_cmdline=no
 compress="zstd"
-add_dracutmodules+=" crypt dm lvm rootfs-block "
+# Removed 'lvm' which caused issues; include key and crypttab
+add_dracutmodules+=" crypt rootfs-block "
 install_items+=" /boot/volume.key /etc/crypttab "
 EOF
 
-log "Configuring GRUB with cryptodisk and LVM support"
+log "Configuring GRUB"
+# Fix: removed rd.lvm.vg=void-vg and point root to mapper
 cat > /etc/default/grub << EOF
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR="Void"
-GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 mitigations=auto lockdown=confidentiality init_on_alloc=1 init_on_free=1 page_poison=1 vsyscall=none slab_nomerge pti=on"
-GRUB_CMDLINE_LINUX="rd.luks.uuid=\${ROOT_LUKS_UUID} rd.lvm.vg=void-vg root=/dev/void-vg/root"
+GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 mitigations=auto lockdown=confidentiality init_on_alloc=1 init_on_free=1 page_poison=1 vsyscall=none slab_nomerge pti=on apparmor=1 security=apparmor"
+GRUB_CMDLINE_LINUX="rd.luks.uuid=\${ROOT_LUKS_UUID} root=/dev/mapper/root_crypt"
 GRUB_ENABLE_CRYPTODISK=y
 EOF
 
 log "Installing GRUB to EFI"
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable
+# grub-install --removable # Optional
 grub-mkconfig -o /boot/grub/grub.cfg
 
-log "Regenerating initramfs with LUKS support"
+log "Regenerating initramfs"
 xbps-reconfigure -fa
 
 log "System configuration complete!"
 SCRIPT_EOF
 
     chmod +x /mnt/configure.sh
-    success "Configuration script ready"
-}
 
+    # We must add the LUKS key from the host, because /dev/by-uuid may not be
+    # consistent inside the chroot. The key lives at /mnt/boot/volume.key on host.
+    log "Adding internal key to LUKS slots (host side)"
+    echo -n "Adding volume.key to LUKS. You need to enter the partition password one more time:"
+    cryptsetup luksAddKey "$(p 4)" /mnt/boot/volume.key || warn "Failed to add LUKS key; boot will prompt for passphrase"
 
-    chmod +x /mnt/configure.sh
     success "Configuration script ready"
 }
 
@@ -579,7 +589,8 @@ handle_state() {
             setup_luks
             open_luks
             mount_filesystems
-            install_base_system
+            bootstrap_system
+            generate_fstab
             generate_chroot_script
             run_chroot_config
             ;;
@@ -587,14 +598,19 @@ handle_state() {
             setup_luks
             open_luks
             mount_filesystems
-            install_base_system
+            bootstrap_system
+            generate_fstab
             generate_chroot_script
             run_chroot_config
             ;;
         LUKS_CLOSED|ROOT_OPEN_HOME_CLOSED)
             open_luks
             mount_filesystems
-            install_base_system
+            # Verify if base system exists before installing
+            if [[ ! -f /mnt/bin/bash ]]; then
+                bootstrap_system
+                generate_fstab
+            fi
             generate_chroot_script
             run_chroot_config
             ;;
@@ -608,12 +624,16 @@ handle_state() {
             ;;
         NOT_MOUNTED|PARTIAL_MOUNT)
             mount_filesystems
-            install_base_system
+            if [[ ! -f /mnt/bin/bash ]]; then
+                bootstrap_system
+                generate_fstab
+            fi
             generate_chroot_script
             run_chroot_config
             ;;
         NO_SYSTEM)
-            install_base_system
+            bootstrap_system
+            generate_fstab
             generate_chroot_script
             run_chroot_config
             ;;
@@ -691,8 +711,9 @@ cleanup() {
     # Deactivate LVM
     vgchange -an void-vg 2>/dev/null || true
 
-    # Close LUKS
+    # Close LUKS (prefer standardized names, keep fallback)
     cryptsetup close home_crypt 2>/dev/null || true
+    cryptsetup close root_crypt 2>/dev/null || true
     cryptsetup close void_crypt 2>/dev/null || true
 
     log "Cleanup complete"
