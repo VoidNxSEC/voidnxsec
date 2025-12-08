@@ -282,18 +282,30 @@ partition_disk() {
     # Clear disk with wipefs for safety across all partition schemes
     wipefs -af "$DISK" || warn "Could not wipe filesystem signatures"
 
-    # Use cfdisk (interactive) for manual partition creation
-    # This allows the user to verify partitions before writing
-    log "Opening cfdisk for manual partition layout"
-    log "Create the following partitions:"
-    log "  1. EFI:  ${EFI_SIZE} (Type: EFI System)"
-    log "  2. BOOT: ${BOOT_SIZE} (Type: Linux)"
-    log "  3. SWAP: ${SWAP_SIZE} (Type: Linux Swap)"
-    log "  4. ROOT: ${ROOT_SIZE} (Type: Linux)"
-    log "  5. HOME: remainder (Type: Linux)"
-    log "Press 'W' to write changes, 'Q' to quit cfdisk"
+    # Use sfdisk for non-interactive automatic partitioning
+    log "Automatically creating partition layout on $DISK"
+    log "Partitions: EFI=${EFI_SIZE}, BOOT=${BOOT_SIZE}, SWAP=${SWAP_SIZE}, ROOT=${ROOT_SIZE}, HOME=remainder"
     
-    cfdisk "$DISK" || error "Partitioning failed or cancelled"
+    sfdisk "$DISK" << SFDISK_EOF
+label: gpt
+label-id: $(uuidgen)
+device: $DISK
+
+# EFI partition
+size=${EFI_SIZE}, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="EFI"
+# BOOT partition
+size=${BOOT_SIZE}, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="BOOT"
+# SWAP partition
+size=${SWAP_SIZE}, type=0657FD6D-A4AB-43C4-84E5-0933C84B4F4F, name="SWAP"
+# ROOT partition
+size=${ROOT_SIZE}, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="ROOT"
+# HOME partition (remainder)
+type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="HOME"
+SFDISK_EOF
+
+    if [[ $? -ne 0 ]]; then
+        error "sfdisk partitioning failed"
+    fi
 
     partprobe "$DISK"
     sleep 2
