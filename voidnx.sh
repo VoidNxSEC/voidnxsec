@@ -456,25 +456,38 @@ setup_luks() {
 open_luks() {
     log "Opening LUKS devices"
 
+    # Check if root partition exists before trying to open
+    if [[ ! -b "$(p 4)" ]]; then
+        warn "Root partition $(p 4) does not exist; skipping LUKS open"
+        return
+    fi
+
     if [[ ! -e /dev/mapper/root_crypt ]]; then
         cryptsetup open "$(p 4)" root_crypt || error "Failed to open root"
     else
         info "Root already open"
     fi
 
-    if [[ ! -e /dev/mapper/home_crypt ]]; then
-        cryptsetup open "$(p 5)" home_crypt || error "Failed to open home"
+    # Check if home partition exists before trying to open
+    if [[ ! -b "$(p 5)" ]]; then
+        warn "Home partition $(p 5) does not exist; skipping HOME LUKS open"
+    elif [[ ! -e /dev/mapper/home_crypt ]]; then
+        cryptsetup open "$(p 5)" home_crypt || warn "Failed to open home (may not be LUKS formatted yet)"
     else
         info "Home already open"
     fi
 
-    # Create filesystems if needed
-    if ! blkid /dev/mapper/root_crypt 2>/dev/null | grep -q 'TYPE='; then
-        mkfs.ext4 -F -L ROOT /dev/mapper/root_crypt
+    # Create filesystems if needed (only for devices that were successfully opened)
+    if [[ -e /dev/mapper/root_crypt ]]; then
+        if ! blkid /dev/mapper/root_crypt 2>/dev/null | grep -q 'TYPE='; then
+            mkfs.ext4 -F -L ROOT /dev/mapper/root_crypt
+        fi
     fi
 
-    if ! blkid /dev/mapper/home_crypt 2>/dev/null | grep -q 'TYPE='; then
-        mkfs.ext4 -F -L HOME /dev/mapper/home_crypt
+    if [[ -e /dev/mapper/home_crypt ]]; then
+        if ! blkid /dev/mapper/home_crypt 2>/dev/null | grep -q 'TYPE='; then
+            mkfs.ext4 -F -L HOME /dev/mapper/home_crypt
+        fi
     fi
 
     success "LUKS devices ready"
