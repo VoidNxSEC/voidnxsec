@@ -307,7 +307,12 @@ SFDISK_EOF
         error "sfdisk partitioning failed"
     fi
 
-    partprobe "$DISK"
+    # Rescan partition table (use blockdev if partprobe unavailable)
+    if command -v partprobe &>/dev/null; then
+        partprobe "$DISK"
+    else
+        blockdev --rereadpt "$DISK" 2>/dev/null || true
+    fi
     sleep 2
 
     success "Partitioning complete"
