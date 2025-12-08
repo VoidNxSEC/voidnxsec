@@ -279,16 +279,21 @@ partition_disk() {
     read -p "Type 'YES' to continue: " confirm
     [[ "$confirm" != "YES" ]] && error "Aborted by user"
 
-    # Clear disk
-    sgdisk --zap-all "$DISK"
-    sgdisk --clear "$DISK"
+    # Clear disk with wipefs for safety across all partition schemes
+    wipefs -af "$DISK" || warn "Could not wipe filesystem signatures"
 
-    # Create partitions
-    sgdisk --new=1:0:+${EFI_SIZE}  --typecode=1:ef00 --change-name=1:EFI  "$DISK"
-    sgdisk --new=2:0:+${BOOT_SIZE} --typecode=2:8300 --change-name=2:BOOT "$DISK"
-    sgdisk --new=3:0:+${SWAP_SIZE} --typecode=3:8200 --change-name=3:SWAP "$DISK"
-    sgdisk --new=4:0:+${ROOT_SIZE} --typecode=4:8300 --change-name=4:ROOT "$DISK"
-    sgdisk --new=5:0:0              --typecode=5:8300 --change-name=5:HOME "$DISK"
+    # Use cfdisk (interactive) for manual partition creation
+    # This allows the user to verify partitions before writing
+    log "Opening cfdisk for manual partition layout"
+    log "Create the following partitions:"
+    log "  1. EFI:  ${EFI_SIZE} (Type: EFI System)"
+    log "  2. BOOT: ${BOOT_SIZE} (Type: Linux)"
+    log "  3. SWAP: ${SWAP_SIZE} (Type: Linux Swap)"
+    log "  4. ROOT: ${ROOT_SIZE} (Type: Linux)"
+    log "  5. HOME: remainder (Type: Linux)"
+    log "Press 'W' to write changes, 'Q' to quit cfdisk"
+    
+    cfdisk "$DISK" || error "Partitioning failed or cancelled"
 
     partprobe "$DISK"
     sleep 2
