@@ -603,7 +603,6 @@ bootstrap_system() {
         dracut
         lvm2
         void-repo-nonfree
-        arch-install-scripts
     )
 
     if [[ "${LIBC_TYPE:-glibc}" == "musl" ]]; then
