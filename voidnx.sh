@@ -224,42 +224,42 @@ detect_disk_size_and_adjust() {
     local disk_size_gb=$((disk_size_bytes / 1024 / 1024 / 1024))
     info "Detected disk size: ${disk_size_gb}GB"
 
-    # Suggest partition layout based on available space
+    # Suggest partition layout based on available space (with safety margin)
     log "Recommended partition layout for ${disk_size_gb}GB disk:"
     
     if [[ $disk_size_gb -lt 30 ]]; then
-        # Small disk (VMs with 20GB)
+        # Small disk (VMs with 20GB) - be conservative with ROOT
         EFI_SIZE="512M"
         BOOT_SIZE="512M"
-        SWAP_SIZE="2G"
-        ROOT_SIZE="10G"
+        SWAP_SIZE="1G"
+        ROOT_SIZE="8G"
         log "  • EFI: 512M"
         log "  • BOOT: 512M"
-        log "  • SWAP: 2G"
-        log "  • ROOT: 10G"
-        log "  • HOME: remainder (~${disk_size_gb}GB - 13GB)"
+        log "  • SWAP: 1G"
+        log "  • ROOT: 8G"
+        log "  • HOME: remainder (~${disk_size_gb}GB - 10GB)"
     elif [[ $disk_size_gb -lt 60 ]]; then
         # Medium disk (40-50GB)
         EFI_SIZE="512M"
         BOOT_SIZE="1G"
-        SWAP_SIZE="4G"
-        ROOT_SIZE="20G"
+        SWAP_SIZE="2G"
+        ROOT_SIZE="15G"
         log "  • EFI: 512M"
         log "  • BOOT: 1G"
-        log "  • SWAP: 4G"
-        log "  • ROOT: 20G"
-        log "  • HOME: remainder (~${disk_size_gb}GB - 25.5GB)"
+        log "  • SWAP: 2G"
+        log "  • ROOT: 15G"
+        log "  • HOME: remainder (~${disk_size_gb}GB - 18.5GB)"
     else
         # Large disk (100GB+)
         EFI_SIZE="512M"
         BOOT_SIZE="1G"
-        SWAP_SIZE="8G"
-        ROOT_SIZE="50G"
+        SWAP_SIZE="4G"
+        ROOT_SIZE="30G"
         log "  • EFI: 512M"
         log "  • BOOT: 1G"
-        log "  • SWAP: 8G"
-        log "  • ROOT: 50G"
-        log "  • HOME: remainder (~${disk_size_gb}GB - 59.5GB)"
+        log "  • SWAP: 4G"
+        log "  • ROOT: 30G"
+        log "  • HOME: remainder (~${disk_size_gb}GB - 35.5GB)"
     fi
 
     # Ask user to confirm or customize
