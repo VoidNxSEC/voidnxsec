@@ -498,28 +498,56 @@ open_luks() {
 # Em mount_filesystems() (corrige EFI mount)
 mount_filesystems() {
     log "Mounting filesystems"
+    
+    # Check if root_crypt mapper exists before mounting
+    if [[ ! -e /dev/mapper/root_crypt ]]; then
+        error "Root LUKS mapper /dev/mapper/root_crypt does not exist. Did you run 'open_luks' or 'setup_luks' first?"
+    fi
+    
     if ! mountpoint -q /mnt; then
         mount /dev/mapper/root_crypt /mnt || error "Failed to mount root"
     fi
+    
     mkdir -p /mnt/{boot,home}
+    
     if ! mountpoint -q /mnt/boot; then
-        mount "$(p 2)" /mnt/boot || error "Failed to mount boot"
+        if [[ -b "$(p 2)" ]]; then
+            mount "$(p 2)" /mnt/boot || error "Failed to mount boot"
+        else
+            warn "Boot partition $(p 2) not found; skipping boot mount"
+        fi
     fi
+    
     mkdir -p /mnt/boot/efi
     if ! mountpoint -q /mnt/boot/efi; then
-        mount "$(p 1)" /mnt/boot/efi || error "Failed to mount EFI"
+        if [[ -b "$(p 1)" ]]; then
+            mount "$(p 1)" /mnt/boot/efi || error "Failed to mount EFI"
+        else
+            warn "EFI partition $(p 1) not found; skipping EFI mount"
+        fi
     fi
+    
     mkdir -p /mnt/{dev,proc,sys,run,tmp}
-    if ! mountpoint -q /mnt/home; then
-        mount /dev/mapper/home_crypt /mnt/home || error "Failed to mount home"
+    
+    # Only try to mount home if mapper exists
+    if [[ -e /dev/mapper/home_crypt ]]; then
+        if ! mountpoint -q /mnt/home; then
+            mount /dev/mapper/home_crypt /mnt/home || warn "Failed to mount home"
+        fi
+    else
+        warn "Home LUKS mapper /dev/mapper/home_crypt does not exist; skipping home mount"
     fi
 
-    # Activate swap
-    if ! swapon --show | grep -q "$(p 3)"; then
-        swapon "$(p 3)" || warn "Failed to activate swap"
+    # Activate swap (only if partition exists)
+    if [[ -b "$(p 3)" ]]; then
+        if ! swapon --show | grep -q "$(p 3)"; then
+            swapon "$(p 3)" || warn "Failed to activate swap"
+        fi
+    else
+        warn "Swap partition $(p 3) not found; skipping swap"
     fi
 
-    success "All filesystems mounted"
+    success "Filesystems mounted (at least root is mounted)"
     save_state "MOUNTED"
 }
 
