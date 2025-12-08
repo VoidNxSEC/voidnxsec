@@ -367,6 +367,7 @@ partition_disk() {
     log "Automatically creating partition layout on $DISK"
     log "Partitions: EFI=${EFI_SIZE}, BOOT=${BOOT_SIZE}, SWAP=${SWAP_SIZE}, ROOT=${ROOT_SIZE}, HOME=remainder"
     
+    # Use sfdisk with stdin (no size limit for last partition = remainder)
     sfdisk "$DISK" << SFDISK_EOF
 label: gpt
 label-id: $(uuidgen)
@@ -380,7 +381,7 @@ size=${BOOT_SIZE}, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="BOOT"
 size=${SWAP_SIZE}, type=0657FD6D-A4AB-43C4-84E5-0933C84B4F4F, name="SWAP"
 # ROOT partition
 size=${ROOT_SIZE}, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="ROOT"
-# HOME partition (remainder)
+# HOME partition (no size = use remainder of disk)
 type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="HOME"
 SFDISK_EOF
 
