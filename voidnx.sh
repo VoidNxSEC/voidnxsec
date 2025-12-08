@@ -21,7 +21,16 @@ STATE_FILE="/tmp/void-fortress.state"
 LOG_FILE="/tmp/void-fortress.log"
 
 # User Configuration (edit these!)
-DISK="${DISK:-/dev/nvme0n1}"
+# Auto-detect common disk types: nvme > vda (VM) > sda (HD) > nvme0n1 (fallback)
+if [[ -b /dev/nvme0n1 ]]; then
+    DISK="${DISK:-/dev/nvme0n1}"
+elif [[ -b /dev/vda ]]; then
+    DISK="${DISK:-/dev/vda}"
+elif [[ -b /dev/sda ]]; then
+    DISK="${DISK:-/dev/sda}"
+else
+    DISK="${DISK:-/dev/nvme0n1}"  # Fallback if nothing found
+fi
 LINUX_PARTITION="/"
 LINUX_PARTITION_COUNT=5
 
@@ -145,6 +154,56 @@ detect_environment() {
 
 # Helper for partition names
 p() { echo "${DISK}${PART_SUFFIX}$1"; }
+
+# Auto-select common disk devices (prefer vda for VMs, then sda, then nvme)
+auto_select_disk() {
+    # If DISK is already a real block device, keep it
+    if [[ -b "$DISK" ]]; then
+        return
+    fi
+
+    # Prefer typical VM disk names
+    if [[ -b /dev/vda ]]; then
+        DISK=/dev/vda
+    elif [[ -b /dev/sda ]]; then
+        DISK=/dev/sda
+    elif [[ -b /dev/nvme0n1 ]]; then
+        DISK=/dev/nvme0n1
+    else
+        # If multiple candidates, offer an interactive selection when run in a TTY
+        if [[ -t 0 ]]; then
+            choose_disk
+        else
+            warn "No common disk found and not interactive; using default $DISK"
+        fi
+    fi
+}
+
+# Interactive disk chooser (lists block devices and prompts for selection)
+choose_disk() {
+    echo "Available block devices:"
+    mapfile -t _devs < <(lsblk -dn -o NAME,SIZE,MODEL | awk '{print "/dev/" $1"\t"$2"\t"substr($0,index($0,$3)) }')
+    if [[ ${#_devs[@]} -eq 0 ]]; then
+        error "No block devices found"
+    fi
+
+    for i in "${!_devs[@]}"; do
+        printf "%3d) %s\n" $((i+1)) "${_devs[$i]}"
+    done
+
+    read -rp "Select disk number to use (or press Enter to keep default $DISK): " choice
+    if [[ -z "$choice" ]]; then
+        echo "Keeping default disk: $DISK"
+        return
+    fi
+    if ! [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le ${#_devs[@]} ]]; then
+        warn "Invalid selection, keeping default $DISK"
+        return
+    fi
+    local entry=${_devs[$((choice-1))]}
+    DISK=$(echo "$entry" | awk '{print $1}')
+    echo "Selected disk: $DISK"
+}
 
 # ━━━━━━━━━━━━━━━━━━━━━━ INSTALLATION STATE DETECTION ━━━━━━━━━━━━━━━━━━━━━━
 detect_installation_state() {
@@ -768,6 +827,23 @@ case "${1:-}" in
         prepare_chroot
         chroot /mnt /bin/bash
         cleanup_chroot
+        ;;
+    shell)
+        log "Opening interactive debug shell"
+        open_luks
+        mount_filesystems
+        prepare_chroot
+        log "You are now in an interactive shell; type 'exit' to return"
+        chroot /mnt /bin/bash -i
+        cleanup_chroot
+        ;;
+    debug)
+        log "Running system detection and showing current state"
+        detect_environment
+        IFS='|' read -r STATE DETAILS <<< "$(detect_installation_state)"
+        info "Detected State: $STATE"
+        info "Details: $DETAILS"
+        show_status
         ;;
     clean)
         cleanup
