@@ -36,6 +36,7 @@ LINUX_PARTITION_COUNT=5
 
 CHROOT_MARKER="/tmp/.void-fortress-chroot"
 
+# Default partition sizes (will be adjusted based on disk size)
 EFI_SIZE="512M"
 BOOT_SIZE="1G"
 SWAP_SIZE="8G"
@@ -203,6 +204,86 @@ choose_disk() {
     local entry=${_devs[$((choice-1))]}
     DISK=$(echo "$entry" | awk '{print $1}')
     echo "Selected disk: $DISK"
+}
+
+# Auto-detect disk size and suggest partition layout
+detect_disk_size_and_adjust() {
+    if [[ ! -b "$DISK" ]]; then
+        warn "Disk $DISK not found, using default partition sizes"
+        return
+    fi
+
+    # Get disk size in bytes
+    local disk_size_bytes=$(blockdev --getsize64 "$DISK" 2>/dev/null || lsblk -bn "$DISK" 2>/dev/null | awk '{print $4}')
+    if [[ -z "$disk_size_bytes" ]]; then
+        warn "Could not determine disk size, using default partition sizes"
+        return
+    fi
+
+    # Convert to GB for readability
+    local disk_size_gb=$((disk_size_bytes / 1024 / 1024 / 1024))
+    info "Detected disk size: ${disk_size_gb}GB"
+
+    # Suggest partition layout based on available space
+    log "Recommended partition layout for ${disk_size_gb}GB disk:"
+    
+    if [[ $disk_size_gb -lt 30 ]]; then
+        # Small disk (VMs with 20GB)
+        EFI_SIZE="512M"
+        BOOT_SIZE="512M"
+        SWAP_SIZE="2G"
+        ROOT_SIZE="10G"
+        log "  • EFI: 512M"
+        log "  • BOOT: 512M"
+        log "  • SWAP: 2G"
+        log "  • ROOT: 10G"
+        log "  • HOME: remainder (~${disk_size_gb}GB - 13GB)"
+    elif [[ $disk_size_gb -lt 60 ]]; then
+        # Medium disk (40-50GB)
+        EFI_SIZE="512M"
+        BOOT_SIZE="1G"
+        SWAP_SIZE="4G"
+        ROOT_SIZE="20G"
+        log "  • EFI: 512M"
+        log "  • BOOT: 1G"
+        log "  • SWAP: 4G"
+        log "  • ROOT: 20G"
+        log "  • HOME: remainder (~${disk_size_gb}GB - 25.5GB)"
+    else
+        # Large disk (100GB+)
+        EFI_SIZE="512M"
+        BOOT_SIZE="1G"
+        SWAP_SIZE="8G"
+        ROOT_SIZE="50G"
+        log "  • EFI: 512M"
+        log "  • BOOT: 1G"
+        log "  • SWAP: 8G"
+        log "  • ROOT: 50G"
+        log "  • HOME: remainder (~${disk_size_gb}GB - 59.5GB)"
+    fi
+
+    # Ask user to confirm or customize
+    read -rp "Press Enter to accept suggested sizes, or type 'custom' to edit manually: " choice
+    if [[ "$choice" == "custom" ]]; then
+        customize_partition_sizes
+    fi
+}
+
+# Interactive partition size customizer
+customize_partition_sizes() {
+    log "Customize partition sizes (format: size with M/G suffix, e.g., 512M or 20G)"
+    
+    read -rp "EFI size [$EFI_SIZE]: " input && [[ -n "$input" ]] && EFI_SIZE="$input"
+    read -rp "BOOT size [$BOOT_SIZE]: " input && [[ -n "$input" ]] && BOOT_SIZE="$input"
+    read -rp "SWAP size [$SWAP_SIZE]: " input && [[ -n "$input" ]] && SWAP_SIZE="$input"
+    read -rp "ROOT size [$ROOT_SIZE]: " input && [[ -n "$input" ]] && ROOT_SIZE="$input"
+    
+    log "Final partition sizes:"
+    log "  • EFI: $EFI_SIZE"
+    log "  • BOOT: $BOOT_SIZE"
+    log "  • SWAP: $SWAP_SIZE"
+    log "  • ROOT: $ROOT_SIZE"
+    log "  • HOME: remainder"
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━ INSTALLATION STATE DETECTION ━━━━━━━━━━━━━━━━━━━━━━
@@ -817,6 +898,9 @@ main() {
 
     # Setup
     detect_environment
+    
+    # Auto-detect disk size and adjust partition layout
+    detect_disk_size_and_adjust
 
     # Safety check
     [[ $EUID -eq 0 ]] || error "Must run as root"
