@@ -390,6 +390,7 @@ bootstrap_system() {
     mkdir -p /mnt/var/db/xbps/keys
     cp /var/db/xbps/keys/* /mnt/var/db/xbps/keys/ || warn "Could not copy XBPS keys"
 
+    # Choose base packages depending on libc implementation
     local BASE_PKGS=(
         base-system
         cryptsetup
@@ -400,6 +401,15 @@ bootstrap_system() {
         void-repo-nonfree
         arch-install-scripts
     )
+
+    if [[ "${LIBC_TYPE:-glibc}" == "musl" ]]; then
+        info "Detected musl host; adjusting base packages for musl environment"
+        # musl systems don't need glibc-locales; add musl-locales if available
+        BASE_PKGS+=(musl-locales)
+    else
+        # glibc systems can install glibc locales support
+        BASE_PKGS+=(glibc-locales)
+    fi
 
     # Bootstrap core system with crypto support
     log "Installing base system with crypto support"
@@ -458,13 +468,14 @@ chmod 644 /etc/passwd
 chmod 600 /etc/shadow
 pwconv
 
-# Configuration variables
+    # Configuration variables
 HOSTNAME="${HOSTNAME}"
 USERNAME="${USERNAME}"
 TIMEZONE="${TIMEZONE}"
 ROOT_LUKS_UUID="${ROOT_LUKS_UUID}"
 HOME_LUKS_UUID="${HOME_LUKS_UUID}"
 SWAP_UUID="${SWAP_UUID}"
+LIBC_TYPE="${LIBC_TYPE:-glibc}"
 
 log "Setting hostname"
 echo "\${HOSTNAME}" > /etc/hostname
