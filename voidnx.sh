@@ -153,6 +153,72 @@ detect_environment() {
     save_state "ENV_DETECTED" "LIBC=$LIBC_TYPE,ARCH=$ARCH"
 }
 
+# Validate system requirements
+validate_system_requirements() {
+    log "Validating system requirements..."
+    
+    # Check if running as root
+    if [[ $EUID -ne 0 ]]; then
+        error "This script must be run as root (use: sudo bash voidnx.sh)"
+    fi
+
+    # Check UEFI
+    if [[ ! -d /sys/firmware/efi ]]; then
+        error "UEFI firmware not detected. This installer requires UEFI."
+    fi
+    success "UEFI firmware detected"
+
+    # Check required tools
+    local required_tools=(
+        cryptsetup
+        sfdisk
+        mkfs.ext4
+        mkfs.vfat
+        blkid
+        lsblk
+        blockdev
+        xbps-install
+        dracut
+        grub-install
+        chroot
+    )
+
+    local missing_tools=()
+    for tool in "${required_tools[@]}"; do
+        if ! command -v "$tool" &>/dev/null; then
+            missing_tools+=("$tool")
+        fi
+    done
+
+    if [[ ${#missing_tools[@]} -gt 0 ]]; then
+        error "Missing required tools: ${missing_tools[*]}"
+    fi
+    success "All required tools found"
+
+    # Check kernel version (minimum 5.4 recommended for LUKS2)
+    local kernel_ver=$(uname -r | cut -d. -f1,2)
+    if (( $(echo "$kernel_ver < 5.4" | bc -l) )); then
+        warn "Kernel version $kernel_ver is older than recommended (5.4+)"
+    else
+        success "Kernel version $kernel_ver is supported"
+    fi
+
+    # Check available memory
+    local mem_available=$(free -m | awk '/^Mem:/ {print $7}')
+    if [[ $mem_available -lt 512 ]]; then
+        warn "Low available memory: ${mem_available}MB. Installation may be slow."
+    else
+        success "Available memory: ${mem_available}MB"
+    fi
+
+    # Check network connectivity
+    if ping -c 1 8.8.8.8 &>/dev/null || ping -c 1 1.1.1.1 &>/dev/null; then
+        success "Network connectivity confirmed"
+    else
+        warn "Network connectivity not confirmed. Installation may fail if packages unavailable."
+    fi
+}
+
 # Helper for partition names
 p() { echo "${DISK}${PART_SUFFIX}$1"; }
 
@@ -592,36 +658,84 @@ bootstrap_system() {
 
     # Copy XBPS keys first for package trust
     mkdir -p /mnt/var/db/xbps/keys
-    cp /var/db/xbps/keys/* /mnt/var/db/xbps/keys/ || warn "Could not copy XBPS keys"
+    cp /var/db/xbps/keys/* /mnt/var/db/xbps/keys/ 2>/dev/null || warn "Could not copy XBPS keys"
 
     # Choose base packages depending on libc implementation
     local BASE_PKGS=(
+        # Core System
         base-system
+        base-system-essentials
+        
+        # Encryption & Security
         cryptsetup
+        libsodium
+        libfido2
+        tpm2-tools
+        
+        # Boot & EFI
         grub-x86_64-efi
         efibootmgr
         dracut
+        linux
+        linux-headers
+        
+        # System Management
         lvm2
+        e2fsprogs
+        dosfstools
+        parted
+        
+        # Network & Utils
+        dhcpcd
+        curl
+        wget
+        openssh
+        git
+        
+        # Build Tools
+        base-devel
+        pkg-config
+        
+        # Text Editors
+        nano
+        vim
+        
+        # System Info
+        pciutils
+        usbutils
+        hwinfo
+        
+        # Localization
+        tzdata
+        
+        # Repository Support
         void-repo-nonfree
+        void-repo-multilib
+        void-repo-multilib-nonfree
     )
 
     if [[ "${LIBC_TYPE:-glibc}" == "musl" ]]; then
-        info "Detected musl host; adjusting base packages for musl environment"
-        # musl systems don't need glibc-locales; add musl-locales if available
+        log "Detected musl host; adjusting base packages for musl environment"
         BASE_PKGS+=(musl-locales)
     else
-        # glibc systems can install glibc locales support
+        log "Detected glibc host"
         BASE_PKGS+=(glibc-locales)
     fi
 
     # Bootstrap core system with crypto support
-    log "Installing base system with crypto support"
-    xbps-install -Sy -r /mnt -R "$REPO_URL" "${BASE_PKGS[@]}" || error "Bootstrap failed"
+    log "Installing base system with crypto support (~$(echo "${#BASE_PKGS[@]}" | wc -c) packages)"
+    xbps-install -Sy -r /mnt -R "$REPO_URL" "${BASE_PKGS[@]}" 2>&1 | tee -a "$LOG_FILE" || error "Bootstrap failed"
 
     # Copy network config
     cp -L /etc/resolv.conf /mnt/etc/ 2>/dev/null || warn "Could not copy resolv.conf"
 
-    success "Bootstrap phase complete"
+    # Ensure essential directories exist
+    mkdir -p /mnt/boot/efi
+    mkdir -p /mnt/boot/grub
+    mkdir -p /mnt/etc/cryptsetup
+    mkdir -p /mnt/etc/dracut.conf.d
+
+    success "Bootstrap phase complete ($(ls /mnt/bin/bash && echo 'system ready'))"
     save_state "BOOTSTRAPPED"
 }
 
@@ -758,8 +872,33 @@ grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void
 # grub-install --removable # Optional
 grub-mkconfig -o /boot/grub/grub.cfg
 
-log "Regenerating initramfs"
-xbps-reconfigure -fa
+log "Setting up locale"
+if [[ "\${LIBC_TYPE}" == "musl" ]]; then
+    xbps-reconfigure musl-locales
+else
+    xbps-reconfigure glibc-locales
+fi
+
+log "Configuring locale"
+echo "${LOCALE} UTF-8" > /etc/default/libc-locales
+xbps-reconfigure glibc-locales 2>/dev/null || xbps-reconfigure musl-locales 2>/dev/null || true
+
+log "Setting up locale environment"
+cat >> /etc/profile.d/locale.sh << EOF
+export LANG=${LOCALE}
+export LC_ALL=${LOCALE}
+EOF
+
+log "Regenerating initramfs with dracut"
+dracut -f --kver \$(uname -r)
+xbps-reconfigure -fa linux
+
+log "Installing bootloader"
+# Ensure EFI partition is mounted
+mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void || warn "GRUB install had issues; trying removable"
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void --removable || warn "GRUB install failed"
+grub-mkconfig -o /boot/grub/grub.cfg
 
 log "System configuration complete!"
 SCRIPT_EOF
@@ -769,10 +908,10 @@ SCRIPT_EOF
     # We must add the LUKS key from the host, because /dev/by-uuid may not be
     # consistent inside the chroot. The key lives at /mnt/boot/volume.key on host.
     log "Adding internal key to LUKS slots (host side)"
-    echo -n "Adding volume.key to LUKS. You need to enter the partition password one more time:"
+    echo -n "Adding volume.key to LUKS. You need to enter the partition password one more time: "
     cryptsetup luksAddKey "$(p 4)" /mnt/boot/volume.key || warn "Failed to add LUKS key; boot will prompt for passphrase"
 
-    success "Configuration script ready"
+    success "Configuration script ready for chroot execution"
 }
 
 run_chroot_config() {
@@ -939,8 +1078,10 @@ main() {
 
     # Setup
     detect_environment
+    validate_system_requirements
     
-    # Auto-detect disk size and adjust partition layout
+    # Auto-detect disk and size
+    auto_select_disk
     detect_disk_size_and_adjust
 
     # Safety check
