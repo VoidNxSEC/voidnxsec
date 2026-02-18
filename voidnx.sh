@@ -376,18 +376,15 @@ detect_installation_state() {
         DETAILS="Home partition not LUKS formatted"
 
     # Check if LUKS is open
-    elif [[ ! -e /dev/mapper/void_crypt ]]; then
+    elif [[ ! -e /dev/mapper/root_crypt ]]; then
         STATE="LUKS_CLOSED"
         DETAILS="LUKS devices not opened"
     elif [[ ! -e /dev/mapper/home_crypt ]]; then
         STATE="ROOT_OPEN_HOME_CLOSED"
         DETAILS="Home LUKS not opened"
 
-    # Check LVM and filesystems
-    elif ! vgs void-vg &>/dev/null; then
-        STATE="NO_LVM"
-        DETAILS="LVM volume group not created"
-    elif ! blkid /dev/void-vg/root 2>/dev/null | grep -q 'TYPE='; then
+    # Check filesystems (Direct LUKS, NO LVM)
+    elif ! blkid /dev/mapper/root_crypt 2>/dev/null | grep -q 'TYPE='; then
         STATE="NO_ROOT_FS"
         DETAILS="Root filesystem not created"
     elif ! blkid /dev/mapper/home_crypt 2>/dev/null | grep -q 'TYPE='; then
@@ -864,24 +861,19 @@ GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR="Void"
 GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 mitigations=auto lockdown=confidentiality init_on_alloc=1 init_on_free=1 page_poison=1 vsyscall=none slab_nomerge pti=on apparmor=1 security=apparmor"
 GRUB_CMDLINE_LINUX="rd.luks.uuid=\${ROOT_LUKS_UUID} root=/dev/mapper/root_crypt"
-GRUB_ENABLE_CRYPTODISK=y
+# GRUB_ENABLE_CRYPTODISK=y # Not needed for unencrypted /boot
 EOF
-
-log "Installing GRUB to EFI"
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void
-# grub-install --removable # Optional
-grub-mkconfig -o /boot/grub/grub.cfg
 
 log "Setting up locale"
 if [[ "\${LIBC_TYPE}" == "musl" ]]; then
-    xbps-reconfigure musl-locales
+    xbps-reconfigure -f musl-locales
 else
-    xbps-reconfigure glibc-locales
+    xbps-reconfigure -f glibc-locales
 fi
 
 log "Configuring locale"
 echo "${LOCALE} UTF-8" > /etc/default/libc-locales
-xbps-reconfigure glibc-locales 2>/dev/null || xbps-reconfigure musl-locales 2>/dev/null || true
+xbps-reconfigure -f glibc-locales 2>/dev/null || xbps-reconfigure -f musl-locales 2>/dev/null || true
 
 log "Setting up locale environment"
 cat >> /etc/profile.d/locale.sh << EOF
@@ -889,15 +881,21 @@ export LANG=${LOCALE}
 export LC_ALL=${LOCALE}
 EOF
 
-log "Regenerating initramfs with dracut"
-dracut -f --kver \$(uname -r)
+log "Regenerating initramfs for all installed kernels"
+# Force reconfigure ensures dracut runs with new config
 xbps-reconfigure -fa linux
 
 log "Installing bootloader"
-# Ensure EFI partition is mounted
+# Ensure EFI variables are accessible
 mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void || warn "GRUB install had issues; trying removable"
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void --removable || warn "GRUB install failed"
+
+if [[ -d /sys/firmware/efi ]]; then
+    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void --recheck
+else
+    warn "UEFI not detected inside chroot. Ensure /sys is mounted correctly."
+    # Try valid install anyway, hoping efivars are there or unnecessary for basic layout
+    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void --removable
+fi
 grub-mkconfig -o /boot/grub/grub.cfg
 
 log "System configuration complete!"
@@ -1061,13 +1059,10 @@ cleanup() {
         umount "$mount" 2>/dev/null || true
     done
 
-    # Deactivate LVM
-    vgchange -an void-vg 2>/dev/null || true
-
     # Close LUKS (prefer standardized names, keep fallback)
     cryptsetup close home_crypt 2>/dev/null || true
     cryptsetup close root_crypt 2>/dev/null || true
-    cryptsetup close void_crypt 2>/dev/null || true
+    # cryptsetup close void_crypt 2>/dev/null || true
 
     log "Cleanup complete"
 }
