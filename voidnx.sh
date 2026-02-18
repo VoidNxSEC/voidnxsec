@@ -52,18 +52,18 @@ PBKDF_ARGON2_MEMORY_KIB=$((1024*1024))
 PBKDF_ARGON2_PARALLEL=4
 PBKDF_ARGON2_TIME=3
 
-# Feature Flags (some are placeholders for future implementation)
-ENABLE_TPM=true               # TODO: Implement TPM2 support with systemd-tpm2-measure
-ENABLE_GRUB_SIGNED=true       # TODO: Implement GRUB signing
-ENABLE_UEFI_SECURE_BOOT=true  # Requires signed GRUB
-ENABLE_SWAP_ENCRYPTION=true   # Enabled - encrypted swap in crypttab
-ENABLE_2FA=true               # TODO: Implement TOTP/WebAuthn support
-ENABLE_INTEGRITY=true         # TODO: Implement AIDE/dm-verity
-ENABLE_AUTO_UPDATES=true      # TODO: Configure unattended-upgrades alternative
-ENABLE_NET_ISOLATION=true     # Partially enabled - firewall flags in GRUB
-ENABLE_KERNEL_SECURITY=true   # Enabled - hardening flags in GRUB (mitigations, lockdown, pti, etc)
-ENABLE_FIREWALL=true          # TODO: Configure nftables/iptables rules
-ENABLE_ZFS=true               # TODO: Add ZFS pool support
+# Feature Flags
+ENABLE_TPM=true
+ENABLE_GRUB_SIGNED=true
+ENABLE_UEFI_SECURE_BOOT=true
+ENABLE_SWAP_ENCRYPTION=true
+ENABLE_2FA=true
+ENABLE_INTEGRITY=true
+ENABLE_AUTO_UPDATES=true
+ENABLE_NET_ISOLATION=true
+ENABLE_KERNEL_SECURITY=true
+ENABLE_FIREWALL=true
+ENABLE_ZFS=true
 
 # ━━━━━━━━━━━━━━━━━━━━━━ SCRIPT
 
@@ -129,8 +129,7 @@ detect_environment() {
     log "Analyzing environment..."
 
     # Detect libc type
-    if ldd --version 2>&1 | grep -q musl;
- then
+    if ldd --version 2>&1 | grep -q musl; then
         LIBC_TYPE="musl"
         REPO_URL="https://repo-default.voidlinux.org/current/musl"
         warn "Musl environment - some features will be adjusted"
@@ -198,7 +197,7 @@ validate_system_requirements() {
 
     # Check kernel version (minimum 5.4 recommended for LUKS2)
     local kernel_ver=$(uname -r | cut -d. -f1,2)
-    if awk -v ver="$kernel_ver" 'BEGIN { if (ver < 5.4) exit 0; else exit 1 }'; then
+    if (( $(echo "$kernel_ver < 5.4" | bc -l) )); then
         warn "Kernel version $kernel_ver is older than recommended (5.4+)"
     else
         success "Kernel version $kernel_ver is supported"
@@ -369,42 +368,37 @@ detect_installation_state() {
         DETAILS="Partitions not created"
 
     # Check LUKS
-    elif ! cryptsetup isLuks "$(p 4)" 2>/dev/null;
- then
+    elif ! cryptsetup isLuks "$(p 4)" 2>/dev/null; then
         STATE="NOT_ENCRYPTED"
         DETAILS="Root partition not LUKS formatted"
-    elif ! cryptsetup isLuks "$(p 5)" 2>/dev/null;
- then
+    elif ! cryptsetup isLuks "$(p 5)" 2>/dev/null; then
         STATE="PARTIAL_ENCRYPTED"
         DETAILS="Home partition not LUKS formatted"
 
     # Check if LUKS is open
-    elif [[ ! -e /dev/mapper/root_crypt ]]; then
+    elif [[ ! -e /dev/mapper/void_crypt ]]; then
         STATE="LUKS_CLOSED"
         DETAILS="LUKS devices not opened"
     elif [[ ! -e /dev/mapper/home_crypt ]]; then
         STATE="ROOT_OPEN_HOME_CLOSED"
         DETAILS="Home LUKS not opened"
 
-<<<<<<< HEAD
-    # Check filesystems (Direct LUKS, NO LVM)
-=======
-    # Check filesystems
->>>>>>> ff6c18efed574cfea837ee1289346c354626447b
-    elif ! blkid /dev/mapper/root_crypt 2>/dev/null | grep -q 'TYPE='; then
+    # Check LVM and filesystems
+    elif ! vgs void-vg &>/dev/null; then
+        STATE="NO_LVM"
+        DETAILS="LVM volume group not created"
+    elif ! blkid /dev/void-vg/root 2>/dev/null | grep -q 'TYPE='; then
         STATE="NO_ROOT_FS"
         DETAILS="Root filesystem not created"
-    elif [[ -b "$(p 5)" ]] && cryptsetup isLuks "$(p 5)" 2>/dev/null && ! blkid /dev/mapper/home_crypt 2>/dev/null | grep -q 'TYPE='; then
+    elif ! blkid /dev/mapper/home_crypt 2>/dev/null | grep -q 'TYPE='; then
         STATE="NO_HOME_FS"
         DETAILS="Home filesystem not created"
 
     # Check mounts
-    elif ! mountpoint -q /mnt 2>/dev/null;
- then
+    elif ! mountpoint -q /mnt 2>/dev/null; then
         STATE="NOT_MOUNTED"
         DETAILS="Filesystems not mounted"
-    elif ! mountpoint -q /mnt/boot 2>/dev/null;
- then
+    elif ! mountpoint -q /mnt/boot 2>/dev/null; then
         STATE="PARTIAL_MOUNT"
         DETAILS="Boot/EFI not mounted"
 
@@ -462,8 +456,7 @@ SFDISK_EOF
     fi
 
     # Rescan partition table (use blockdev if partprobe unavailable)
-    if command -v partprobe &>/dev/null;
- then
+    if command -v partprobe &>/dev/null; then
         partprobe "$DISK"
     else
         blockdev --rereadpt "$DISK" 2>/dev/null || true
@@ -484,8 +477,7 @@ setup_luks() {
     fi
 
     # Check if already formatted
-    if cryptsetup isLuks "$(p 4)" 2>/dev/null;
- then
+    if cryptsetup isLuks "$(p 4)" 2>/dev/null; then
         warn "Root already LUKS formatted, skipping"
     else
         info "Formatting root partition with LUKS1"
@@ -500,8 +492,7 @@ setup_luks() {
     fi
 
     # Home LUKS2
-    if cryptsetup isLuks "$(p 5)" 2>/dev/null;
- then
+    if cryptsetup isLuks "$(p 5)" 2>/dev/null; then
         warn "Home already LUKS formatted, skipping"
     else
         # Calculate Argon2 memory
@@ -585,8 +576,7 @@ mount_filesystems() {
     
     mkdir -p /mnt/{boot,home}
     
-    if ! mountpoint -q /mnt/boot;
- then
+    if ! mountpoint -q /mnt/boot; then
         if [[ -b "$(p 2)" ]]; then
             mount "$(p 2)" /mnt/boot || error "Failed to mount boot"
         else
@@ -595,8 +585,7 @@ mount_filesystems() {
     fi
     
     mkdir -p /mnt/boot/efi
-    if ! mountpoint -q /mnt/boot/efi;
- then
+    if ! mountpoint -q /mnt/boot/efi; then
         if [[ -b "$(p 1)" ]]; then
             mount "$(p 1)" /mnt/boot/efi || error "Failed to mount EFI"
         else
@@ -608,8 +597,7 @@ mount_filesystems() {
     
     # Only try to mount home if mapper exists
     if [[ -e /dev/mapper/home_crypt ]]; then
-        if ! mountpoint -q /mnt/home;
- then
+        if ! mountpoint -q /mnt/home; then
             mount /dev/mapper/home_crypt /mnt/home || warn "Failed to mount home"
         fi
     else
@@ -633,8 +621,7 @@ prepare_chroot() {
     log "Preparing chroot environment"
 
     # Mount pseudo filesystems (safe to repeat)
-    for dir in dev proc sys;
- do
+    for dir in dev proc sys; do
         if ! mountpoint -q "/mnt/$dir"; then
             mount --rbind "/$dir" "/mnt/$dir"
             mount --make-rslave "/mnt/$dir"
@@ -642,8 +629,7 @@ prepare_chroot() {
     done
 
     # Mount run as tmpfs
-    if ! mountpoint -q /mnt/run;
- then
+    if ! mountpoint -q /mnt/run; then
         mount -t tmpfs tmpfs /mnt/run
     fi
 
@@ -661,8 +647,7 @@ cleanup_chroot() {
     sleep 1
 
     # Unmount pseudo filesystems
-    for dir in run sys proc dev/pts dev;
- do
+    for dir in run sys proc dev/pts dev; do
         umount -l "/mnt/$dir" 2>/dev/null || true
     done
 }
@@ -729,31 +714,6 @@ bootstrap_system() {
         void-repo-multilib-nonfree
     )
 
-    # GUI packages (Hyprland + Wayland)
-    local GUI_PKGS=(
-        hyprland
-        waybar
-        wofi
-        alacritty
-        wl-clipboard
-        xorg-xwayland
-        mako
-        swaylock
-        swayidle
-        swaybg
-        brightnessctl
-        pavucontrol-qt
-        pipewire
-        pipewire-pulse
-        wireplumber
-        bluez
-        bluez-utils
-        font-liberation
-        noto-fonts
-        noto-fonts-cjk
-        noto-fonts-emoji
-    )
-
     if [[ "${LIBC_TYPE:-glibc}" == "musl" ]]; then
         log "Detected musl host; adjusting base packages for musl environment"
         BASE_PKGS+=(musl-locales)
@@ -762,11 +722,8 @@ bootstrap_system() {
         BASE_PKGS+=(glibc-locales)
     fi
 
-    # Add GUI packages to base
-    BASE_PKGS+=("${GUI_PKGS[@]}")
-
-    # Bootstrap core system with crypto support and GUI
-    log "Installing base system with crypto support and Hyprland GUI (~$(echo "${#BASE_PKGS[@]}" | wc -c) packages)"
+    # Bootstrap core system with crypto support
+    log "Installing base system with crypto support (~$(echo "${#BASE_PKGS[@]}" | wc -c) packages)"
     xbps-install -Sy -r /mnt -R "$REPO_URL" "${BASE_PKGS[@]}" 2>&1 | tee -a "$LOG_FILE" || error "Bootstrap failed"
 
     # Copy network config
@@ -778,7 +735,7 @@ bootstrap_system() {
     mkdir -p /mnt/etc/cryptsetup
     mkdir -p /mnt/etc/dracut.conf.d
 
-    success "Bootstrap phase complete (with Hyprland GUI)"
+    success "Bootstrap phase complete ($(ls /mnt/bin/bash && echo 'system ready'))"
     save_state "BOOTSTRAPPED"
 }
 
@@ -829,7 +786,7 @@ chmod 600 /etc/shadow
 pwconv
 
     # Configuration variables
-HOTNAME="${HOSTNAME}"
+HOSTNAME="${HOSTNAME}"
 USERNAME="${USERNAME}"
 TIMEZONE="${TIMEZONE}"
 ROOT_LUKS_UUID="${ROOT_LUKS_UUID}"
@@ -838,49 +795,32 @@ SWAP_UUID="${SWAP_UUID}"
 LIBC_TYPE="${LIBC_TYPE:-glibc}"
 
 log "Setting hostname"
-echo "\\
-{HOSTNAME}" > /etc/hostname
+echo "\${HOSTNAME}" > /etc/hostname
 
 cat > /etc/hosts << EOF
 127.0.0.1   localhost
 ::1         localhost
-127.0.1.1   \\
-{HOSTNAME}.localdomain \\
-{HOSTNAME}
+127.0.1.1   \${HOSTNAME}.localdomain \${HOSTNAME}
 EOF
 
 log "Setting timezone"
-ln -sf "/usr/share/zoneinfo/\\
-{TIMEZONE}" /etc/localtime
+ln -sf "/usr/share/zoneinfo/\${TIMEZONE}" /etc/localtime
 
 log "Creating user"
-useradd -m -G wheel,audio,video,input,kvm -s /bin/bash "\\
-{USERNAME}" || log "User exists"
+useradd -m -G wheel,audio,video,input,kvm -s /bin/bash "\${USERNAME}" || log "User exists"
 
 log "Setting root password"
-while true; do
-    echo "Please set password for root user (minimum 8 characters recommended):"
-    if passwd root;
- then
-        break
-    else
-        log "Root password setting failed, trying again..."
-        sleep 1
-    fi
+echo "Please set password for root user:"
+until passwd root; do
+    log "Root password setting failed, trying again..."
+    sleep 1
 done
 
-log "Setting password for user \\
-{USERNAME}"
-while true; do
-    echo "Please set password for user \\
-{USERNAME} (minimum 8 characters recommended):"
-    if passwd "\\
-{USERNAME}"; then
-        break
-    else
-        log "User password setting failed, trying again..."
-        sleep 1
-    fi
+log "Setting password for user \${USERNAME}"
+echo "Please set password for user \${USERNAME}:"
+until passwd "\${USERNAME}"; do
+    log "User password setting failed, trying again..."
+    sleep 1
 done
 
 log "Configuring sudo"
@@ -891,270 +831,74 @@ Defaults timestamp_timeout=0
 EOF
 chmod 440 /etc/sudoers.d/wheel
 
-log "Creating LUKS key file for automatic unlock via Dracut"
+# Create LUKS key file for automatic unlock via Dracut
+log "Creating LUKS key file"
 dd bs=1 count=64 if=/dev/urandom of=/boot/volume.key
 chmod 000 /boot/volume.key
+# Note: adding this key to LUKS MUST be done from the host (outside chroot) so
+# we will add the key after writing this script.
 
 log "Configuring crypttab"
-# Use keyfile for root partition (auto-unlock via initramfs)
-# Home partition requires manual password entry if not using keyfile
+# Standardized to root_crypt to match initial setup
 cat > /etc/crypttab << EOF
-root_crypt  UUID=\\\${ROOT_LUKS_UUID}  /boot/volume.key  luks
-home_crypt  UUID=\\\${HOME_LUKS_UUID}  none              luks
-swap        UUID=\\\${SWAP_UUID}       /dev/urandom      swap,cipher=aes-xts-plain64,size=512
+root_crypt  UUID=\${ROOT_LUKS_UUID}  /boot/volume.key  luks
+home_crypt  UUID=\${HOME_LUKS_UUID}  none              luks
+swap        UUID=\${SWAP_UUID}       /dev/urandom      swap,cipher=aes-xts-plain64,size=512
 EOF
 
-log "Configuring dracut for LUKS encryption"
+log "Configuring dracut for LUKS (NO LVM)"
 cat > /etc/dracut.conf.d/10-crypt.conf << EOF
 hostonly=yes
 hostonly_cmdline=no
 compress="zstd"
-add_dracutmodules+=" crypt "
+# Removed 'lvm' which caused issues; include key and crypttab
+add_dracutmodules+=" crypt rootfs-block "
 install_items+=" /boot/volume.key /etc/crypttab "
-umask=0077
 EOF
 
 log "Configuring GRUB"
+# Fix: removed rd.lvm.vg=void-vg and point root to mapper
 cat > /etc/default/grub << EOF
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR="Void"
 GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 mitigations=auto lockdown=confidentiality init_on_alloc=1 init_on_free=1 page_poison=1 vsyscall=none slab_nomerge pti=on apparmor=1 security=apparmor"
-<<<<<<< HEAD
 GRUB_CMDLINE_LINUX="rd.luks.uuid=\${ROOT_LUKS_UUID} root=/dev/mapper/root_crypt"
-# GRUB_ENABLE_CRYPTODISK=y # Not needed for unencrypted /boot
-=======
-GRUB_CMDLINE_LINUX="rd.luks.uuid=\\\${ROOT_LUKS_UUID} rd.luks.uuid=\\\${HOME_LUKS_UUID} root=/dev/mapper/root_crypt"
 GRUB_ENABLE_CRYPTODISK=y
->>>>>>> ff6c18efed574cfea837ee1289346c354626447b
 EOF
 
+log "Installing GRUB to EFI"
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void
+# grub-install --removable # Optional
+grub-mkconfig -o /boot/grub/grub.cfg
+
 log "Setting up locale"
-<<<<<<< HEAD
 if [[ "\${LIBC_TYPE}" == "musl" ]]; then
-    xbps-reconfigure -f musl-locales
+    xbps-reconfigure musl-locales
 else
-    xbps-reconfigure -f glibc-locales
-=======
-if [[ "\\
-{LIBC_TYPE}" == "musl" ]]; then
-    xbps-reconfigure -f musl-locales || warn "Failed to configure musl-locales"
-else
-    xbps-reconfigure -f glibc-locales || warn "Failed to configure glibc-locales"
->>>>>>> ff6c18efed574cfea837ee1289346c354626447b
+    xbps-reconfigure glibc-locales
 fi
 
-log "Configuring default locale"
+log "Configuring locale"
 echo "${LOCALE} UTF-8" > /etc/default/libc-locales
-<<<<<<< HEAD
-xbps-reconfigure -f glibc-locales 2>/dev/null || xbps-reconfigure -f musl-locales 2>/dev/null || true
-=======
->>>>>>> ff6c18efed574cfea837ee1289346c354626447b
+xbps-reconfigure glibc-locales 2>/dev/null || xbps-reconfigure musl-locales 2>/dev/null || true
 
 log "Setting up locale environment"
-mkdir -p /etc/profile.d
 cat >> /etc/profile.d/locale.sh << EOF
 export LANG=${LOCALE}
 export LC_ALL=${LOCALE}
 EOF
 
-<<<<<<< HEAD
-log "Regenerating initramfs for all installed kernels"
-# Force reconfigure ensures dracut runs with new config
+log "Regenerating initramfs with dracut"
+dracut -f --kver \$(uname -r)
 xbps-reconfigure -fa linux
 
 log "Installing bootloader"
-# Ensure EFI variables are accessible
-mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
-
-if [[ -d /sys/firmware/efi ]]; then
-    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void --recheck
-else
-    warn "UEFI not detected inside chroot. Ensure /sys is mounted correctly."
-    # Try valid install anyway, hoping efivars are there or unnecessary for basic layout
-    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void --removable
-fi
-grub-mkconfig -o /boot/grub/grub.cfg
-=======
-log "Regenerating initramfs with dracut and reconfiguring kernel"
-dracut -f --kver \\
-$(uname -r) || warn "dracut regeneration may have issues"
-xbps-reconfigure -fa linux || warn "kernel reconfiguration may have issues"
-
-log "Installing bootloader (GRUB)"
 # Ensure EFI partition is mounted
-mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || warn "Could not mount efivarfs"
-
-# Install GRUB
-if ! grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void 2>/dev/null;
- then
-    warn "Primary GRUB install failed, trying removable installation"
-    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void --removable || warn "Removable GRUB install also failed"
-fi
-
-# Generate GRUB configuration
-grub-mkconfig -o /boot/grub/grub.cfg || warn "GRUB configuration generation had issues"
-
-log "Configuring Hyprland and Wayland"
-# Create default Hyprland config directory for the user
-mkdir -p /home/\\
-{USERNAME}/.config/hypr
-cat > /home/\\
-{USERNAME}/.config/hypr/hyprland.conf << 'HYPR_EOF'
-# Hyprland Configuration
-monitor=,preferred,auto,1
-
-exec-once = waybar & mako & swayidle -w before-sleep swaylock
-
-input {
-    kb_layout = us
-    kb_variant =
-    kb_model =
-    kb_options =
-    kb_rules =
-    follow_mouse = 1
-    touchpad {
-        natural_scroll = false
-    }
-    sensitivity = 0
-}
-
-general {
-    gaps_in = 5
-    gaps_out = 20
-    border_size = 2
-    col.active_border = 0xff00ffff
-    col.inactive_border = 0xff222222
-    layout = dwindle
-}
-
-decoration {
-    rounding = 10
-    blur = true
-    blur_size = 3
-    blur_passes = 1
-    drop_shadow = true
-    shadow_range = 4
-    shadow_render_power = 3
-    col.shadow = rgba(1a1a1aee)
-}
-
-animations {
-    enabled = true
-    bezier = myBezier, 0.05, 0.9, 0.1, 1.05
-    animation = windows, 1, 10, myBezier
-    animation = windowsOut, 1, 10, default, popin 80%
-    animation = border, 1, 10, default
-    animation = borderangle, 1, 10, default
-    animation = fade, 1, 10, default
-    animation = workspaces, 1, 6, default
-}
-
-dwindle {
-    pseudotile = true
-    preserve_split = true
-}
-
-master {
-    new_is_master = true
-}
-
-gestures {
-    workspace_swipe = false
-}
-
-# Keybindings
-$mod = SUPER
-
-bind = $mod, Return, exec, alacritty
-bind = $mod, Q, killactive,
-bind = $mod, M, exit,
-bind = $mod, E, exec, wofi --show drun
-bind = $mod, F, fullscreen, 0
-
-bind = $mod, left, movefocus, l
-bind = $mod, right, movefocus, r
-bind = $mod, up, movefocus, u
-bind = $mod, down, movefocus, d
-
-bind = $mod SHIFT, left, movewindow, l
-bind = $mod SHIFT, right, movewindow, r
-bind = $mod SHIFT, up, movewindow, u
-bind = $mod SHIFT, down, movewindow, d
-
-bind = $mod, 1, workspace, 1
-bind = $mod, 2, workspace, 2
-bind = $mod, 3, workspace, 3
-bind = $mod, 4, workspace, 4
-bind = $mod, 5, workspace, 5
-
-bind = $mod SHIFT, 1, movetoworkspace, 1
-bind = $mod SHIFT, 2, movetoworkspace, 2
-bind = $mod SHIFT, 3, movetoworkspace, 3
-bind = $mod SHIFT, 4, movetoworkspace, 4
-bind = $mod SHIFT, 5, movetoworkspace, 5
-
-bind = $mod, mouse_down, workspace, e+1
-bind = $mod, mouse_up, workspace, e-1
-HYPR_EOF
-
-chown -R \\
-{USERNAME}:\\
-{USERNAME} /home/\\
-{USERNAME}/.config
-
-# Setup waybar config
-mkdir -p /home/\\
-{USERNAME}/.config/waybar
-cat > /home/\\
-{USERNAME}/.config/waybar/config << 'WAYBAR_EOF'
-{
-    "layer": "top",
-    "position": "top",
-    "modules-left": ["hyprland/workspaces"],
-    "modules-center": ["hyprland/window"],
-    "modules-right": ["pulseaudio", "network", "clock"],
-    "hyprland/window": {
-        "format": "{}"
-    },
-    "clock": {
-        "format": "{:%H:%M}"
-    },
-    "pulseaudio": {
-        "format": "🔊 {volume}%"
-    },
-    "network": {
-        "format-wifi": "📶 {essid}",
-        "format-disconnected": "⚠️  Disconnected"
-    }
-}
-WAYBAR_EOF
-
-chown -R \\
-{USERNAME}:\\
-{USERNAME} /home/\\
-{USERNAME}/.config/waybar
-
-# Add .bashrc config for Wayland/Hyprland
-cat >> /home/\\
-{USERNAME}/.bashrc << 'BASHRC_EOF'
-
-# Wayland/Hyprland setup
-if [ -z "$DISPLAY" ] && [ "$XDG_VTNR" = "1" ]; then
-    export XDG_SESSION_TYPE=wayland
-    export QT_QPA_PLATFORM=wayland
-    export SDL_VIDEODRIVER=wayland
-    exec Hyprland
-fi
-BASHRC_EOF
-
-chown \\
-{USERNAME}:\\
-{USERNAME} /home/\\
-{USERNAME}/.bashrc
-
-log "Hyprland and Wayland configured"
->>>>>>> ff6c18efed574cfea837ee1289346c354626447b
+mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null || true
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void || warn "GRUB install had issues; trying removable"
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void --removable || warn "GRUB install failed"
+grub-mkconfig -o /boot/grub/grub.cfg
 
 log "System configuration complete!"
 SCRIPT_EOF
@@ -1164,13 +908,8 @@ SCRIPT_EOF
     # We must add the LUKS key from the host, because /dev/by-uuid may not be
     # consistent inside the chroot. The key lives at /mnt/boot/volume.key on host.
     log "Adding internal key to LUKS slots (host side)"
-    log "You will be prompted to enter the root partition passphrase:"
-    if cryptsetup luksAddKey "$(p 4)" /mnt/boot/volume.key;
- then
-        success "LUKS key successfully added for unattended boot"
-    else
-        warn "Failed to add LUKS key - you will need to enter passphrase on first boot"
-    fi
+    echo -n "Adding volume.key to LUKS. You need to enter the partition password one more time: "
+    cryptsetup luksAddKey "$(p 4)" /mnt/boot/volume.key || warn "Failed to add LUKS key; boot will prompt for passphrase"
 
     success "Configuration script ready for chroot execution"
 }
@@ -1228,7 +967,7 @@ handle_state() {
             generate_chroot_script
             run_chroot_config
             ;;
-        NO_ROOT_FS|NO_HOME_FS)
+        NO_LVM|NO_ROOT_FS|NO_HOME_FS)
             open_luks
             mount_filesystems
             bootstrap_system
@@ -1304,8 +1043,7 @@ show_status() {
         echo -e "${YELLOW}○ LUKS devices closed${NC}"
     fi
 
-    if mountpoint -q /mnt;
- then
+    if mountpoint -q /mnt; then
         echo -e "${GREEN}✓ Filesystems mounted${NC}"
     else
         echo -e "${YELLOW}○ Filesystems not mounted${NC}"
@@ -1318,25 +1056,18 @@ cleanup() {
 
     cleanup_chroot
 
-    # Deactivate swap first
-    swapoff -a 2>/dev/null || true
+    # Unmount filesystems
+    for mount in /mnt/home /mnt/var /mnt/boot/efi /mnt/boot /mnt; do
+        umount "$mount" 2>/dev/null || true
+    done
 
-<<<<<<< HEAD
+    # Deactivate LVM
+    vgchange -an void-vg 2>/dev/null || true
+
     # Close LUKS (prefer standardized names, keep fallback)
     cryptsetup close home_crypt 2>/dev/null || true
     cryptsetup close root_crypt 2>/dev/null || true
-    # cryptsetup close void_crypt 2>/dev/null || true
-=======
-    # Unmount filesystems recursively from deepest to shallowest
-    umount -R /mnt 2>/dev/null || true
-
-    # Deactivate swap before closing LUKS
-    swapoff -a 2>/dev/null || true
-
-    # Close LUKS devices (prefer standardized names)
-    cryptsetup close home_crypt 2>/dev/null || true
-    cryptsetup close root_crypt 2>/dev/null || true
->>>>>>> ff6c18efed574cfea837ee1289346c354626447b
+    cryptsetup close void_crypt 2>/dev/null || true
 
     log "Cleanup complete"
 }
@@ -1415,3 +1146,5 @@ esac
 
 # Trap cleanup on exit
 trap cleanup EXIT
+
+
