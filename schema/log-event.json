@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogEvent",
+  "description": "JSONL Schema for OS Bootstrap and Installation Events",
+  "type": "object",
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "type": "string",
+      "enum": ["INFO", "WARN", "ERROR", "DEBUG", "FATAL", "STATE"]
+    },
+    "phase": {
+      "type": "string",
+      "description": "Current installation or bootstrap phase (e.g., format_disk, mount, chroot, base_system)"
+    },
+    "message": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Arbitrary key-value pairs relevant to the specific event"
+    },
+    "hash": {
+      "type": "string",
+      "description": "Deterministic state hash for the current phase (used for validation)"
+    }
+  },
+  "required": ["timestamp", "level", "phase", "message"]
+}
