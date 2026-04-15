@@ -1,0 +1,194 @@
+# .github/workflows/test-installer.yml
+name: VOID FORTRESS — Integration Test
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  test-installer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU + tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-x86 qemu-utils \
+            ovmf curl jq expect
+
+      - name: Download Void Linux ISO
+        run: |
+          VOID_ISO="void-live-x86_64-20230628-base.iso"
+          VOID_URL="https://repo-default.voidlinux.org/live/current/${VOID_ISO}"
+
+          if [[ ! -f "$VOID_ISO" ]]; then
+            curl -L -o "$VOID_ISO" "$VOID_URL"
+          fi
+          echo "VOID_ISO=${VOID_ISO}" >> "$GITHUB_ENV"
+
+      - name: Create test disk
+        run: |
+          qemu-img create -f qcow2 test-disk.qcow2 25G
+          echo "TEST_DISK=test-disk.qcow2" >> "$GITHUB_ENV"
+
+      - name: Prepare installer payload
+        run: |
+          # Cria um disco ISO com o installer dentro
+          mkdir -p payload
+          cp -r . payload/void-fortress/
+
+          # Script de auto-run dentro da VM
+          cat > payload/void-fortress/autorun.sh << 'AUTORUN'
+          #!/bin/bash
+          set -euo pipefail
+
+          export DISK="/dev/vda"
+          export HOSTNAME="void-test"
+          export USERNAME="testuser"
+          export TIMEZONE="UTC"
+          export LOG_DIR="/tmp/void-fortress-logs"
+          export LUKS_PASS="TestPass123!ForCI"
+          export USER_PASS="TestPass123!ForCI"
+          export ROOT_PASS="TestPass123!ForCI"
+          export AUTO_CONFIRM=true
+
+          mkdir -p "$LOG_DIR"
+
+          cd /root/void-fortress
+          bash voidnx.sh 2>&1 | tee "${LOG_DIR}/full-output.log"
+
+          # Copia logs pra disco de saída
+          mkdir -p /mnt/output
+          mount /dev/vdb /mnt/output
+          cp -r "$LOG_DIR"/* /mnt/output/
+          umount /mnt/output
+
+          # Sinaliza sucesso
+          poweroff
+          AUTORUN
+          chmod +x payload/void-fortress/autorun.sh
+
+      - name: Create output disk
+        run: |
+          qemu-img create -f qcow2 output-disk.qcow2 1G
+          # Formata pra ext4
+          sudo modprobe nbd
+          sudo qemu-nbd -c /dev/nbd0 output-disk.qcow2
+          sudo mkfs.ext4 /dev/nbd0
+          sudo qemu-nbd -d /dev/nbd0
+
+      - name: Run installer in QEMU
+        timeout-minutes: 20
+        run: |
+          qemu-system-x86_64 \
+            -m 2048 \
+            -cpu host \
+            -enable-kvm \
+            -bios /usr/share/ovmf/OVMF.fd \
+            -drive file="${TEST_DISK}",format=qcow2,if=virtio \
+            -drive file=output-disk.qcow2,format=qcow2,if=virtio \
+            -cdrom "${VOID_ISO}" \
+            -boot d \
+            -nographic \
+            -serial mon:stdio \
+            -net nic -net user \
+            2>&1 | tee qemu-output.log &
+
+          QEMU_PID=$!
+
+          # Espera VM terminar (poweroff) ou timeout
+          wait $QEMU_PID || true
+
+      - name: Extract & analyze logs
+        if: always()
+        run: |
+          # Monta disco de output
+          sudo modprobe nbd
+          sudo qemu-nbd -c /dev/nbd0 output-disk.qcow2
+          mkdir -p logs-output
+          sudo mount /dev/nbd0 logs-output/
+
+          echo "=== Arquivos de log ==="
+          ls -la logs-output/
+
+          # Copia logs
+          sudo cp -r logs-output/* ./ci-logs/ 2>/dev/null || true
+
+          sudo umount logs-output/
+          sudo qemu-nbd -d /dev/nbd0
+
+      - name: Analyze JSONL logs
+        if: always()
+        run: |
+          LOG="ci-logs/install.jsonl"
+
+          if [[ ! -f "$LOG" ]]; then
+            echo "::error::JSONL log não encontrado — VM pode não ter iniciado"
+            exit 1
+          fi
+
+          echo "=== RESUMO ==="
+          jq -rs '{
+            total: length,
+            errors: [.[] | select(.level=="FAIL" or .level=="FATAL")] | length,
+            phases: [.[] | select(.level=="STATE") | .phase],
+            last_phase: ([.[] | select(.level=="STATE")] | last).phase
+          }' "$LOG"
+
+          # Falhas viram annotations do GitHub
+          jq -r 'select(.level == "FAIL" or .level == "FATAL") |
+            "::error file=\(.bash_source // "voidnx.sh"),line=\(.line // 0)::\(.phase): \(.msg)"' "$LOG"
+
+          # Warnings viram warnings do GitHub
+          jq -r 'select(.level == "WARN") |
+            "::warning::\(.phase): \(.msg)"' "$LOG"
+
+          # Checa se completou
+          LAST_PHASE=$(jq -rs '([.[] | select(.level=="STATE")] | last).phase' "$LOG")
+          if [[ "$LAST_PHASE" != "finalize" && "$LAST_PHASE" != "complete" ]]; then
+            echo "::error::Instalação não completou. Última fase: ${LAST_PHASE}"
+            exit 1
+          fi
+
+          echo "✅ Instalação completou com sucesso"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: void-fortress-logs-${{ github.sha }}
+          path: |
+            ci-logs/
+            qemu-output.log
+          retention-days: 30
+
+      - name: Post summary
+        if: always()
+        run: |
+          LOG="ci-logs/install.jsonl"
+          [[ ! -f "$LOG" ]] && exit 0
+
+          cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+          ## 🏰 VOID FORTRESS — Test Results
+
+          EOF
+
+          # Tabela de fases
+          echo "| Phase | Status | Duration |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|----------|" >> "$GITHUB_STEP_SUMMARY"
+
+          jq -rs '
+            [.[] | select(.level == "STATE")] |
+            . as $s |
+            range(length) as $i |
+            if $i < (length - 1) then
+              "| \($s[$i].phase) | ✅ | \(($s[$i+1].elapsed_ms - $s[$i].elapsed_ms) / 1000)s |"
+            else
+              "| \($s[$i].phase) | 🏁 | — |"
+            end
+          ' "$LOG" >> "$GITHUB_STEP_SUMMARY"
