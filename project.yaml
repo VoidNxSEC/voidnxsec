@@ -1,0 +1,15 @@
+# Project Configuration
+version: "1.0"
+services:
+  rust_service:
+    path: "./rust-service"
+    enabled: true
+  go_service:
+    path: "./go-service"
+    enabled: true
+  c_app:
+    path: "./c-app"
+    enabled: true
+  cpp_app:
+    path: "./cpp-app"
+    enabled: true
