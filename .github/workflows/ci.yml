@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  lint:
+    name: Static analysis (bash -n + shellcheck + regression checks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Make tests executable
+        run: chmod +x tests/*.sh
+
+      - name: Run lint suite
+        run: ./tests/01-lint.sh
+
+  unit:
+    name: Unit tests (functions in isolation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make tests executable
+        run: chmod +x tests/*.sh
+
+      - name: Run unit suite
+        run: ./tests/02-unit.sh
+
+  full-suite:
+    name: Full offline suite (lint + unit aggregate)
+    runs-on: ubuntu-latest
+    needs: [lint, unit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Make tests executable
+        run: chmod +x tests/*.sh
+
+      - name: Run all offline suites
+        run: ./tests/run-all.sh
