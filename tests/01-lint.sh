@@ -100,4 +100,67 @@ else
     fail "warn() missing in chroot configure.sh (regression of fix #5)"
 fi
 
+# 9. recompute_part_suffix() should exist and be called from auto_select_disk (fix #8)
+if grep -qE '^recompute_part_suffix\(\)' "$SCRIPT_UNDER_TEST"; then
+    pass "recompute_part_suffix() function defined (fix #8)"
+else
+    fail "recompute_part_suffix() not defined (regression of fix #8)"
+fi
+auto_select_body=$(awk '/^auto_select_disk\(\) \{/,/^\}/' "$SCRIPT_UNDER_TEST")
+if echo "$auto_select_body" | grep -q 'recompute_part_suffix'; then
+    pass "auto_select_disk calls recompute_part_suffix (fix #8)"
+else
+    fail "auto_select_disk does NOT call recompute_part_suffix"
+fi
+
+# 10. base-system-essentials should NOT appear (fix #9)
+if grep -q 'base-system-essentials' "$SCRIPT_UNDER_TEST"; then
+    fail "base-system-essentials still in BASE_PKGS (regression of fix #9)"
+else
+    pass "base-system-essentials not present (fix #9)"
+fi
+
+# 11. apparmor=1 / security=apparmor should not be in default GRUB cmdline (fix #10)
+if grep -E 'GRUB_CMDLINE_LINUX_DEFAULT=.*apparmor=1' "$SCRIPT_UNDER_TEST" >/dev/null; then
+    fail "apparmor=1 still in GRUB_CMDLINE_LINUX_DEFAULT (regression of fix #10)"
+else
+    pass "apparmor not in default GRUB cmdline (fix #10)"
+fi
+
+# 12. Non-interactive password support (fix #11)
+if grep -q 'LUKS_PASS' "$SCRIPT_UNDER_TEST"; then
+    pass "LUKS_PASS supported in voidnx.sh (fix #11)"
+else
+    fail "LUKS_PASS not handled (regression of fix #11)"
+fi
+if grep -q 'chpasswd' "$SCRIPT_UNDER_TEST"; then
+    pass "chpasswd used for non-interactive passwd (fix #11)"
+else
+    fail "chpasswd not used (regression of fix #11)"
+fi
+
+# 13. required_tools should include the missing tools (fix #12)
+validate_body=$(awk '/^validate_system_requirements\(\) \{/,/^\}/' "$SCRIPT_UNDER_TEST")
+for new_tool in bc uuidgen fuser wipefs swapon mkswap chpasswd; do
+    if echo "$validate_body" | grep -qw "$new_tool"; then
+        pass "required_tools includes $new_tool (fix #12)"
+    else
+        fail "required_tools missing $new_tool (regression of fix #12)"
+    fi
+done
+
+# 14. IS_LIVE detection should use explicit if (fix #13)
+if grep -E 'if \[\[ -f /run/void-live \]\] \|\| grep' "$SCRIPT_UNDER_TEST" >/dev/null; then
+    pass "IS_LIVE detection uses explicit if (fix #13)"
+else
+    fail "IS_LIVE detection still ambiguous (regression of fix #13)"
+fi
+
+# 15. Package count should not use wc -c (fix #14)
+if grep -E '\$\{#BASE_PKGS\[@\]\} packages' "$SCRIPT_UNDER_TEST" >/dev/null; then
+    pass "package count uses array length directly (fix #14)"
+else
+    fail "package count still uses wc -c trick (regression of fix #14)"
+fi
+
 finish_suite
