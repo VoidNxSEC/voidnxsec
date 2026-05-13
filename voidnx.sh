@@ -21,6 +21,11 @@ STATE_FILE="/tmp/void-fortress.state"
 LOG_FILE="/tmp/void-fortress.log"
 
 # User Configuration (edit these!)
+#
+# Non-interactive mode: set any of LUKS_PASS / ROOT_PASS / USER_PASS in the
+# environment before invoking the script (e.g. via install-auto.sh). When set,
+# password prompts are bypassed — when unset, the script asks interactively.
+#
 # Auto-detect common disk types: nvme > vda (VM) > sda (HD) > nvme0n1 (fallback)
 if [[ -b /dev/nvme0n1 ]]; then
     DISK="${DISK:-/dev/nvme0n1}"
@@ -138,19 +143,30 @@ detect_environment() {
         REPO_URL="https://repo-default.voidlinux.org/current"
     fi
 
-    # Detect if live environment
+    # Detect if live environment.
+    # Note: previous form `[[ -f X ]] || grep ... && IS_LIVE=true` had ambiguous
+    # precedence — when the file existed, IS_LIVE was never set. Use explicit if.
     IS_LIVE=false
-    [[ -f /run/void-live ]] || grep -q "void-live" /proc/cmdline 2>/dev/null && IS_LIVE=true
+    if [[ -f /run/void-live ]] || grep -q "void-live" /proc/cmdline 2>/dev/null; then
+        IS_LIVE=true
+    fi
 
     # Architecture
     ARCH=$(uname -m)
 
-    # Partition naming scheme
-    PART_SUFFIX=""
-    [[ $DISK == *nvme* || $DISK == *mmcblk* ]] && PART_SUFFIX="p"
+    # Partition naming scheme — initial value, MUST be recomputed after
+    # auto_select_disk in case DISK changes (see recompute_part_suffix).
+    recompute_part_suffix
 
     info "Environment: $LIBC_TYPE on $ARCH, Live: $IS_LIVE"
     save_state "ENV_DETECTED" "LIBC=$LIBC_TYPE,ARCH=$ARCH"
+}
+
+# Recompute PART_SUFFIX based on current DISK. Call this any time DISK
+# is reassigned (e.g. after auto_select_disk or interactive choose_disk).
+recompute_part_suffix() {
+    PART_SUFFIX=""
+    [[ $DISK == *nvme* || $DISK == *mmcblk* ]] && PART_SUFFIX="p"
 }
 
 # Validate system requirements
@@ -170,17 +186,29 @@ validate_system_requirements() {
 
     # Check required tools
     local required_tools=(
+        # Core install
         cryptsetup
         sfdisk
         mkfs.ext4
         mkfs.vfat
+        mkswap
         blkid
         lsblk
         blockdev
+        wipefs
+        swapon
         xbps-install
         dracut
         grub-install
         chroot
+        chpasswd
+        # Utilities used by the script (some live ISOs ship minimal busybox)
+        awk
+        bc
+        uuidgen
+        fuser
+        dd
+        ping
     )
 
     local missing_tools=()
@@ -244,6 +272,8 @@ auto_select_disk() {
             warn "No common disk found and not interactive; using default $DISK"
         fi
     fi
+    # DISK may have changed — recompute partition suffix (nvme uses "p" prefix)
+    recompute_part_suffix
 }
 
 # Interactive disk chooser (lists block devices and prompts for selection)
@@ -269,6 +299,7 @@ choose_disk() {
     fi
     local entry=${_devs[$((choice-1))]}
     DISK=$(echo "$entry" | awk '{print $1}')
+    recompute_part_suffix
     echo "Selected disk: $DISK"
 }
 
@@ -376,18 +407,15 @@ detect_installation_state() {
         DETAILS="Home partition not LUKS formatted"
 
     # Check if LUKS is open
-    elif [[ ! -e /dev/mapper/void_crypt ]]; then
+    elif [[ ! -e /dev/mapper/root_crypt ]]; then
         STATE="LUKS_CLOSED"
         DETAILS="LUKS devices not opened"
     elif [[ ! -e /dev/mapper/home_crypt ]]; then
         STATE="ROOT_OPEN_HOME_CLOSED"
         DETAILS="Home LUKS not opened"
 
-    # Check LVM and filesystems
-    elif ! vgs void-vg &>/dev/null; then
-        STATE="NO_LVM"
-        DETAILS="LVM volume group not created"
-    elif ! blkid /dev/void-vg/root 2>/dev/null | grep -q 'TYPE='; then
+    # Check filesystems on LUKS-backed devices
+    elif ! blkid /dev/mapper/root_crypt 2>/dev/null | grep -q 'TYPE='; then
         STATE="NO_ROOT_FS"
         DETAILS="Root filesystem not created"
     elif ! blkid /dev/mapper/home_crypt 2>/dev/null | grep -q 'TYPE='; then
@@ -476,19 +504,36 @@ setup_luks() {
         mkfs.ext4 -F -L BOOT "$(p 2)"
     fi
 
+    # Detect non-interactive mode (set by install-auto.sh or external CI).
+    # When LUKS_PASS is set, feed it via stdin with --batch-mode and skip
+    # --verify-passphrase (incompatible with key-file/stdin input).
+    local NONINTERACTIVE_LUKS=false
+    [[ -n "${LUKS_PASS:-}" ]] && NONINTERACTIVE_LUKS=true
+
     # Check if already formatted
     if cryptsetup isLuks "$(p 4)" 2>/dev/null; then
         warn "Root already LUKS formatted, skipping"
     else
         info "Formatting root partition with LUKS1"
-        cryptsetup luksFormat \
-            --type luks1 \
-            --cipher aes-xts-plain64 \
-            --key-size 512 \
-            --hash sha512 \
-            --iter-time "$LUKS1_ITER_TIME_MS" \
-            --verify-passphrase \
-            "$(p 4)"
+        if [[ "$NONINTERACTIVE_LUKS" == "true" ]]; then
+            printf '%s' "$LUKS_PASS" | cryptsetup luksFormat \
+                --type luks1 \
+                --cipher aes-xts-plain64 \
+                --key-size 512 \
+                --hash sha512 \
+                --iter-time "$LUKS1_ITER_TIME_MS" \
+                --batch-mode --key-file - \
+                "$(p 4)"
+        else
+            cryptsetup luksFormat \
+                --type luks1 \
+                --cipher aes-xts-plain64 \
+                --key-size 512 \
+                --hash sha512 \
+                --iter-time "$LUKS1_ITER_TIME_MS" \
+                --verify-passphrase \
+                "$(p 4)"
+        fi
     fi
 
     # Home LUKS2
@@ -502,21 +547,45 @@ setup_luks() {
         [[ $argon_mem -gt 4194304 ]] && argon_mem=4194304
 
         info "Formatting home partition with LUKS2 (Argon2id)"
-        cryptsetup luksFormat \
-            --type luks2 \
-            --cipher aes-xts-plain64 \
-            --key-size 512 \
-            --hash sha512 \
-            --pbkdf argon2id \
-            --pbkdf-memory "$argon_mem" \
-            --pbkdf-parallel "$PBKDF_ARGON2_PARALLEL" \
-            --iter-time "$PBKDF_ARGON2_TIME" \
-            --verify-passphrase \
-            "$(p 5)"
+        if [[ "$NONINTERACTIVE_LUKS" == "true" ]]; then
+            printf '%s' "$LUKS_PASS" | cryptsetup luksFormat \
+                --type luks2 \
+                --cipher aes-xts-plain64 \
+                --key-size 512 \
+                --hash sha512 \
+                --pbkdf argon2id \
+                --pbkdf-memory "$argon_mem" \
+                --pbkdf-parallel "$PBKDF_ARGON2_PARALLEL" \
+                --iter-time "$PBKDF_ARGON2_TIME" \
+                --batch-mode --key-file - \
+                "$(p 5)"
+        else
+            cryptsetup luksFormat \
+                --type luks2 \
+                --cipher aes-xts-plain64 \
+                --key-size 512 \
+                --hash sha512 \
+                --pbkdf argon2id \
+                --pbkdf-memory "$argon_mem" \
+                --pbkdf-parallel "$PBKDF_ARGON2_PARALLEL" \
+                --iter-time "$PBKDF_ARGON2_TIME" \
+                --verify-passphrase \
+                "$(p 5)"
+        fi
     fi
 
     success "LUKS setup complete"
     save_state "LUKS_FORMATTED"
+}
+
+# Open a LUKS device. If LUKS_PASS is set, feed via stdin. Otherwise prompt.
+_open_luks_device() {
+    local part="$1" mapper_name="$2"
+    if [[ -n "${LUKS_PASS:-}" ]]; then
+        printf '%s' "$LUKS_PASS" | cryptsetup open --key-file - "$part" "$mapper_name"
+    else
+        cryptsetup open "$part" "$mapper_name"
+    fi
 }
 
 open_luks() {
@@ -529,7 +598,7 @@ open_luks() {
     fi
 
     if [[ ! -e /dev/mapper/root_crypt ]]; then
-        cryptsetup open "$(p 4)" root_crypt || error "Failed to open root"
+        _open_luks_device "$(p 4)" root_crypt || error "Failed to open root"
     else
         info "Root already open"
     fi
@@ -538,7 +607,7 @@ open_luks() {
     if [[ ! -b "$(p 5)" ]]; then
         warn "Home partition $(p 5) does not exist; skipping HOME LUKS open"
     elif [[ ! -e /dev/mapper/home_crypt ]]; then
-        cryptsetup open "$(p 5)" home_crypt || warn "Failed to open home (may not be LUKS formatted yet)"
+        _open_luks_device "$(p 5)" home_crypt || warn "Failed to open home (may not be LUKS formatted yet)"
     else
         info "Home already open"
     fi
@@ -664,8 +733,7 @@ bootstrap_system() {
     local BASE_PKGS=(
         # Core System
         base-system
-        base-system-essentials
-        
+
         # Encryption & Security
         cryptsetup
         libsodium
@@ -723,7 +791,7 @@ bootstrap_system() {
     fi
 
     # Bootstrap core system with crypto support
-    log "Installing base system with crypto support (~$(echo "${#BASE_PKGS[@]}" | wc -c) packages)"
+    log "Installing base system with crypto support (${#BASE_PKGS[@]} packages)"
     xbps-install -Sy -r /mnt -R "$REPO_URL" "${BASE_PKGS[@]}" 2>&1 | tee -a "$LOG_FILE" || error "Bootstrap failed"
 
     # Copy network config
@@ -735,7 +803,11 @@ bootstrap_system() {
     mkdir -p /mnt/etc/cryptsetup
     mkdir -p /mnt/etc/dracut.conf.d
 
-    success "Bootstrap phase complete ($(ls /mnt/bin/bash && echo 'system ready'))"
+    if [[ -x /mnt/bin/bash ]]; then
+        success "Bootstrap phase complete (system ready)"
+    else
+        warn "Bootstrap finished but /mnt/bin/bash is missing or not executable"
+    fi
     save_state "BOOTSTRAPPED"
 }
 
@@ -747,7 +819,10 @@ generate_fstab() {
     local BOOT_UUID=$(blkid -s UUID -o value "$(p 2)")
     local ROOT_CRYPT_UUID=$(blkid -s UUID -o value /dev/mapper/root_crypt)
     local HOME_CRYPT_UUID=$(blkid -s UUID -o value /dev/mapper/home_crypt)
-    local SWAP_UUID=$(blkid -s UUID -o value "$(p 3)")
+
+    # Swap is encrypted with a random key per boot via crypttab (see generate_chroot_script).
+    # The mapper /dev/mapper/swap is created and mkswap'd on boot, so fstab must
+    # reference the mapper, NOT the raw partition UUID (which has no swap signature).
 
     # Generate fstab
     cat > /mnt/etc/fstab << EOF
@@ -756,7 +831,7 @@ UUID=${ROOT_CRYPT_UUID}                      /           ext4    defaults,noatim
 UUID=${BOOT_UUID}                            /boot       ext4    defaults,noatime,nodev  0      2
 UUID=${EFI_UUID}                             /boot/efi   vfat    defaults,umask=0077     0      2
 UUID=${HOME_CRYPT_UUID}                      /home       ext4    defaults,noatime,nodev  0      2
-UUID=${SWAP_UUID}                            none        swap    sw                      0      0
+/dev/mapper/swap                             none        swap    sw                      0      0
 tmpfs                                        /tmp        tmpfs   defaults,nosuid,nodev   0      0
 EOF
 
@@ -777,7 +852,8 @@ generate_chroot_script() {
     cat > /mnt/configure.sh << SCRIPT_EOF
 #!/bin/bash
 set -euo pipefail
-log() { echo -e "\033[0;32m[CONFIG] \$*\033[0m"; }
+log()  { echo -e "\033[0;32m[CONFIG] \$*\033[0m"; }
+warn() { echo -e "\033[1;33m[WARN]   \$*\033[0m" >&2; }
 
 # Ensure passwd/shadow exist
 touch /etc/passwd /etc/shadow
@@ -810,18 +886,28 @@ log "Creating user"
 useradd -m -G wheel,audio,video,input,kvm -s /bin/bash "\${USERNAME}" || log "User exists"
 
 log "Setting root password"
-echo "Please set password for root user:"
-until passwd root; do
-    log "Root password setting failed, trying again..."
-    sleep 1
-done
+if [[ -n "\${ROOT_PASS:-}" ]]; then
+    echo "root:\${ROOT_PASS}" | chpasswd
+    log "Root password set non-interactively"
+else
+    echo "Please set password for root user:"
+    until passwd root; do
+        log "Root password setting failed, trying again..."
+        sleep 1
+    done
+fi
 
 log "Setting password for user \${USERNAME}"
-echo "Please set password for user \${USERNAME}:"
-until passwd "\${USERNAME}"; do
-    log "User password setting failed, trying again..."
-    sleep 1
-done
+if [[ -n "\${USER_PASS:-}" ]]; then
+    echo "\${USERNAME}:\${USER_PASS}" | chpasswd
+    log "User password set non-interactively"
+else
+    echo "Please set password for user \${USERNAME}:"
+    until passwd "\${USERNAME}"; do
+        log "User password setting failed, trying again..."
+        sleep 1
+    done
+fi
 
 log "Configuring sudo"
 mkdir -p /etc/sudoers.d
@@ -831,12 +917,14 @@ Defaults timestamp_timeout=0
 EOF
 chmod 440 /etc/sudoers.d/wheel
 
-# Create LUKS key file for automatic unlock via Dracut
-log "Creating LUKS key file"
-dd bs=1 count=64 if=/dev/urandom of=/boot/volume.key
+# LUKS key file is generated by the HOST (see generate_chroot_script),
+# because luksAddKey must run with the host kernel/cryptsetup before chroot.
+# Here we just verify it was placed correctly.
+if [[ ! -f /boot/volume.key ]]; then
+    log "ERROR: /boot/volume.key missing — host did not stage it before chroot"
+    exit 1
+fi
 chmod 000 /boot/volume.key
-# Note: adding this key to LUKS MUST be done from the host (outside chroot) so
-# we will add the key after writing this script.
 
 log "Configuring crypttab"
 # Standardized to root_crypt to match initial setup
@@ -862,7 +950,11 @@ cat > /etc/default/grub << EOF
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR="Void"
-GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 mitigations=auto lockdown=confidentiality init_on_alloc=1 init_on_free=1 page_poison=1 vsyscall=none slab_nomerge pti=on apparmor=1 security=apparmor"
+GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 mitigations=auto lockdown=confidentiality init_on_alloc=1 init_on_free=1 page_poison=1 vsyscall=none slab_nomerge pti=on"
+# AppArmor removed from default cmdline: requires both the apparmor package
+# and a kernel built with CONFIG_SECURITY_APPARMOR=y. Void's default kernel
+# does not enable it. To opt in, install 'apparmor' and add to GRUB_CMDLINE_LINUX:
+#   apparmor=1 security=apparmor
 GRUB_CMDLINE_LINUX="rd.luks.uuid=\${ROOT_LUKS_UUID} root=/dev/mapper/root_crypt"
 GRUB_ENABLE_CRYPTODISK=y
 EOF
@@ -872,16 +964,15 @@ grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=void
 # grub-install --removable # Optional
 grub-mkconfig -o /boot/grub/grub.cfg
 
-log "Setting up locale"
-if [[ "\${LIBC_TYPE}" == "musl" ]]; then
-    xbps-reconfigure musl-locales
-else
-    xbps-reconfigure glibc-locales
-fi
-
 log "Configuring locale"
+# Define which locales to generate, then reconfigure the matching package.
+# (glibc and musl ship different locale packages; pick by libc type.)
 echo "${LOCALE} UTF-8" > /etc/default/libc-locales
-xbps-reconfigure glibc-locales 2>/dev/null || xbps-reconfigure musl-locales 2>/dev/null || true
+if [[ "\${LIBC_TYPE}" == "musl" ]]; then
+    xbps-reconfigure -f musl-locales
+else
+    xbps-reconfigure -f glibc-locales
+fi
 
 log "Setting up locale environment"
 cat >> /etc/profile.d/locale.sh << EOF
@@ -890,7 +981,14 @@ export LC_ALL=${LOCALE}
 EOF
 
 log "Regenerating initramfs with dracut"
-dracut -f --kver \$(uname -r)
+# Detect installed kernel from /lib/modules (NOT host's uname -r, which is the live ISO kernel)
+KVER=\$(ls /lib/modules 2>/dev/null | sort -V | tail -1)
+if [[ -z "\$KVER" ]]; then
+    log "ERROR: no kernel found in /lib/modules — cannot generate initramfs"
+    exit 1
+fi
+log "Building initramfs for kernel \$KVER"
+dracut -f --kver "\$KVER"
 xbps-reconfigure -fa linux
 
 log "Installing bootloader"
@@ -905,11 +1003,27 @@ SCRIPT_EOF
 
     chmod +x /mnt/configure.sh
 
-    # We must add the LUKS key from the host, because /dev/by-uuid may not be
-    # consistent inside the chroot. The key lives at /mnt/boot/volume.key on host.
-    log "Adding internal key to LUKS slots (host side)"
-    echo -n "Adding volume.key to LUKS. You need to enter the partition password one more time: "
-    cryptsetup luksAddKey "$(p 4)" /mnt/boot/volume.key || warn "Failed to add LUKS key; boot will prompt for passphrase"
+    # Generate the LUKS key file on the HOST so cryptsetup can add it BEFORE chroot.
+    # /mnt/boot must already be mounted (boot partition) at this point.
+    if [[ ! -d /mnt/boot ]]; then
+        error "/mnt/boot not present — boot partition not mounted before generate_chroot_script"
+    fi
+    log "Generating LUKS key file at /mnt/boot/volume.key"
+    dd bs=1 count=64 if=/dev/urandom of=/mnt/boot/volume.key status=none
+    chmod 000 /mnt/boot/volume.key
+
+    # Now add the key to the root LUKS slot (host side, before chroot runs).
+    log "Adding internal key to LUKS slot for root"
+    if [[ -n "${LUKS_PASS:-}" ]]; then
+        # Non-interactive: feed existing passphrase via stdin
+        printf '%s' "$LUKS_PASS" | cryptsetup luksAddKey \
+            --key-file - "$(p 4)" /mnt/boot/volume.key \
+            || warn "Failed to add LUKS key; boot will prompt for passphrase"
+    else
+        echo -n "Adding volume.key to LUKS. You need to enter the partition password one more time: "
+        cryptsetup luksAddKey "$(p 4)" /mnt/boot/volume.key \
+            || warn "Failed to add LUKS key; boot will prompt for passphrase"
+    fi
 
     success "Configuration script ready for chroot execution"
 }
@@ -918,7 +1032,12 @@ run_chroot_config() {
     log "Running system configuration in chroot"
 
     prepare_chroot
-    chroot /mnt /configure.sh || error "Configuration failed"
+    # Propagate non-interactive credentials into the chroot. Empty values are
+    # safe — configure.sh treats unset/empty as "fall back to interactive prompt".
+    env \
+        ROOT_PASS="${ROOT_PASS:-}" \
+        USER_PASS="${USER_PASS:-}" \
+        chroot /mnt /configure.sh || error "Configuration failed"
     cleanup_chroot
 
     success "System configured"
@@ -967,7 +1086,7 @@ handle_state() {
             generate_chroot_script
             run_chroot_config
             ;;
-        NO_LVM|NO_ROOT_FS|NO_HOME_FS)
+        NO_ROOT_FS|NO_HOME_FS)
             open_luks
             mount_filesystems
             bootstrap_system
@@ -1057,17 +1176,13 @@ cleanup() {
     cleanup_chroot
 
     # Unmount filesystems
-    for mount in /mnt/home /mnt/var /mnt/boot/efi /mnt/boot /mnt; do
+    for mount in /mnt/home /mnt/boot/efi /mnt/boot /mnt; do
         umount "$mount" 2>/dev/null || true
     done
 
-    # Deactivate LVM
-    vgchange -an void-vg 2>/dev/null || true
-
-    # Close LUKS (prefer standardized names, keep fallback)
+    # Close LUKS
     cryptsetup close home_crypt 2>/dev/null || true
     cryptsetup close root_crypt 2>/dev/null || true
-    cryptsetup close void_crypt 2>/dev/null || true
 
     log "Cleanup complete"
 }
@@ -1098,18 +1213,32 @@ main() {
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━ COMMAND HANDLERS ━━━━━━━━━━━━━━━━━━━━━━
+# Conditional cleanup on exit. Read-only commands (status/debug) leave it false
+# so we don't unmount /mnt or close LUKS the user mounted by hand.
+RUN_CLEANUP_ON_EXIT=false
+exit_trap() {
+    if [[ "$RUN_CLEANUP_ON_EXIT" == "true" ]]; then
+        cleanup
+    fi
+}
+trap exit_trap EXIT
+
 case "${1:-}" in
     status)
+        # Read-only — do NOT run cleanup
         show_status
         ;;
     open)
+        RUN_CLEANUP_ON_EXIT=true
         open_luks
         ;;
     mount)
+        RUN_CLEANUP_ON_EXIT=true
         open_luks
         mount_filesystems
         ;;
     chroot)
+        RUN_CLEANUP_ON_EXIT=true
         open_luks
         mount_filesystems
         prepare_chroot
@@ -1117,6 +1246,7 @@ case "${1:-}" in
         cleanup_chroot
         ;;
     shell)
+        RUN_CLEANUP_ON_EXIT=true
         log "Opening interactive debug shell"
         open_luks
         mount_filesystems
@@ -1126,6 +1256,7 @@ case "${1:-}" in
         cleanup_chroot
         ;;
     debug)
+        # Read-only — do NOT run cleanup
         log "Running system detection and showing current state"
         detect_environment
         IFS='|' read -r STATE DETAILS <<< "$(detect_installation_state)"
@@ -1134,17 +1265,17 @@ case "${1:-}" in
         show_status
         ;;
     clean)
+        # Cleanup itself is the work; trap would double-run it. Skip the trap.
         cleanup
         ;;
     resume)
+        RUN_CLEANUP_ON_EXIT=true
         main
         ;;
     *)
+        RUN_CLEANUP_ON_EXIT=true
         main
         ;;
 esac
-
-# Trap cleanup on exit
-trap cleanup EXIT
 
 
