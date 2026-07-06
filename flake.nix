@@ -1,17 +1,33 @@
 {
-  description = "A multi-language monorepo";
+  description = "VoidNxSEC — NixOS bootstrap cirúrgico + polyglot framework";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
+
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    lanzaboote = {
+      url = "github:nix-community/lanzaboote";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    impermanence.url = "github:nix-community/impermanence";
+    nixos-anywhere = {
+      url = "github:nix-community/nixos-anywhere";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = inputs@{ flake-parts, ... }:
+  outputs = inputs@{ flake-parts, nixpkgs, disko, lanzaboote, sops-nix, impermanence, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-      
-      # Modularization Pattern: 
-      # We split the flake into separate modules per language/service.
+
       imports = [
         ./nix/rust.nix
         ./nix/go.nix
@@ -20,8 +36,6 @@
       ];
 
       perSystem = { config, pkgs, ... }: {
-        # The default devShell merges all the environment requirements 
-        # from our modularized language shells.
         devShells.default = pkgs.mkShell {
           inputsFrom = [
             config.devShells.rust
@@ -29,13 +43,41 @@
             config.devShells.c
             config.devShells.cpp
           ];
-          
-          # General workspace tools
           packages = with pkgs; [
             just
             gnumake
-            yq # Useful for parsing your project.yaml
+            yq
+            age
+            sops
           ];
+        };
+      };
+
+      flake = {
+        nixosConfigurations = {
+          voidnx-server = nixpkgs.lib.nixosSystem {
+            system = "x86_64-linux";
+            specialArgs = { inherit inputs; };
+            modules = [
+              disko.nixosModules.disko
+              lanzaboote.nixosModules.lanzaboote
+              sops-nix.nixosModules.sops
+              impermanence.nixosModules.impermanence
+              ./nixos/hosts/server/default.nix
+            ];
+          };
+
+          voidnx-laptop = nixpkgs.lib.nixosSystem {
+            system = "x86_64-linux";
+            specialArgs = { inherit inputs; };
+            modules = [
+              disko.nixosModules.disko
+              lanzaboote.nixosModules.lanzaboote
+              sops-nix.nixosModules.sops
+              impermanence.nixosModules.impermanence
+              ./nixos/hosts/laptop/default.nix
+            ];
+          };
         };
       };
     };

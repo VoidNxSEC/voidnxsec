@@ -1,5 +1,5 @@
-CC := gcc
-CFLAGS := -Wall -Wextra -O2 -std=c11
+CC      := gcc
+CFLAGS  := -Wall -Wextra -O2 -std=c11 -D_POSIX_C_SOURCE=200809L
 LDFLAGS := -lncurses
 TARGET := voidnx-tui
 SOURCES := voidnx-tui.c
@@ -22,9 +22,11 @@ clean:
 	rm -f $(OBJECTS) $(TARGET)
 
 help:
-	@echo "Void Fortress TUI Makefile"
-	@echo "  make       - Build TUI"
+	@echo "VoidNxSEC TUI v2.0 — Makefile"
+	@echo "  make         - Build TUI (requires ncurses)"
 	@echo "  make install - Install to /usr/local/bin"
-	@echo "  make clean - Remove build artifacts"
+	@echo "  make clean   - Remove build artifacts"
+	@echo ""
+	@echo "  nix develop  - Enter dev shell (all languages + tools)"
 
 .PHONY: all install clean help
