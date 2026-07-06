@@ -1,0 +1,232 @@
+name: NixOS Bootstrap CI
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'nixos/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'scripts/*.sh'
+      - 'tests/05-nixos-vm.sh'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'nixos/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'scripts/*.sh'
+      - 'tests/05-nixos-vm.sh'
+  workflow_dispatch:
+    inputs:
+      run_vm_test:
+        description: 'Run full VM test (self-hosted runner required)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: nixos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 1: Fast eval — runs on GitHub public runners, no KVM needed
+  # Validates: flake syntax, nixosConfigurations eval, security options
+  # ─────────────────────────────────────────────────────────────────────────
+  nixos-eval:
+    name: Nix Eval & Config Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v14
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Check flake inputs resolve
+        run: nix flake metadata --no-update-lock-file
+
+      - name: Validate flake outputs (no build)
+        run: nix flake check --no-build --no-update-lock-file
+
+      - name: Eval voidnx-server config
+        run: |
+          nix eval \
+            .#nixosConfigurations.voidnx-server.config.system.build.toplevel.drvPath \
+            --no-update-lock-file
+
+      - name: Eval voidnx-laptop config
+        run: |
+          nix eval \
+            .#nixosConfigurations.voidnx-laptop.config.system.build.toplevel.drvPath \
+            --no-update-lock-file
+
+      - name: Run eval test suite (05-nixos-vm.sh eval mode)
+        run: |
+          chmod +x tests/05-nixos-vm.sh
+          TEST_MODE=eval PROFILE=server tests/05-nixos-vm.sh
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 2: Security assertions — verify hardening options are set
+  # ─────────────────────────────────────────────────────────────────────────
+  security-assertions:
+    name: Security Config Assertions
+    runs-on: ubuntu-latest
+    needs: nixos-eval
+
+    strategy:
+      matrix:
+        profile: [server, laptop]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v14
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Assert Lanzaboote enabled
+        run: |
+          val=$(nix eval .#nixosConfigurations.voidnx-${{ matrix.profile }}.config.boot.lanzaboote.enable \
+            --no-update-lock-file)
+          [ "$val" = "true" ] || (echo "FAIL: Lanzaboote not enabled on ${{ matrix.profile }}" && exit 1)
+          echo "PASS: Lanzaboote enabled on ${{ matrix.profile }}"
+
+      - name: Assert systemd initrd (TPM2 requirement)
+        run: |
+          val=$(nix eval .#nixosConfigurations.voidnx-${{ matrix.profile }}.config.boot.initrd.systemd.enable \
+            --no-update-lock-file)
+          [ "$val" = "true" ] || (echo "FAIL: systemd initrd not enabled" && exit 1)
+          echo "PASS: systemd initrd enabled"
+
+      - name: Assert AppArmor enabled
+        run: |
+          val=$(nix eval .#nixosConfigurations.voidnx-${{ matrix.profile }}.config.security.apparmor.enable \
+            --no-update-lock-file)
+          [ "$val" = "true" ] || (echo "FAIL: AppArmor not enabled" && exit 1)
+          echo "PASS: AppArmor enabled"
+
+      - name: Assert root is tmpfs (impermanence)
+        run: |
+          val=$(nix eval \
+            ".#nixosConfigurations.voidnx-${{ matrix.profile }}.config.fileSystems.\"/\".fsType" \
+            --no-update-lock-file | tr -d '"')
+          [ "$val" = "tmpfs" ] || (echo "FAIL: Root is '$val', expected tmpfs" && exit 1)
+          echo "PASS: Root filesystem is tmpfs"
+
+      - name: Assert fail2ban enabled
+        run: |
+          val=$(nix eval .#nixosConfigurations.voidnx-${{ matrix.profile }}.config.services.fail2ban.enable \
+            --no-update-lock-file)
+          [ "$val" = "true" ] || (echo "FAIL: fail2ban not enabled" && exit 1)
+          echo "PASS: fail2ban enabled"
+
+      - name: Assert kernel hardened params include pti=on
+        run: |
+          params=$(nix eval \
+            .#nixosConfigurations.voidnx-${{ matrix.profile }}.config.boot.kernelParams \
+            --no-update-lock-file --json)
+          echo "$params" | grep -q "pti=on" || (echo "FAIL: pti=on not in kernelParams" && exit 1)
+          echo "$params" | grep -q "init_on_alloc=1" || (echo "FAIL: init_on_alloc=1 missing" && exit 1)
+          echo "$params" | grep -q "vsyscall=none" || (echo "FAIL: vsyscall=none missing" && exit 1)
+          echo "PASS: Hardened kernel params present"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 3: Script linting — shellcheck on all new scripts
+  # ─────────────────────────────────────────────────────────────────────────
+  script-lint:
+    name: Script Linting (shellcheck)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+
+      - name: Shellcheck scripts/
+        run: |
+          for f in scripts/*.sh; do
+            echo "Checking $f..."
+            shellcheck -x \
+              -e SC1091 \
+              -e SC2086 \
+              -e SC2155 \
+              "$f" && echo "  OK: $f"
+          done
+
+      - name: Shellcheck lib/ (new files)
+        run: |
+          for f in lib/rollback.sh lib/state.sh; do
+            echo "Checking $f..."
+            shellcheck -x \
+              -e SC1091 \
+              -e SC2086 \
+              -e SC2155 \
+              "$f" && echo "  OK: $f"
+          done
+
+      - name: Bash syntax check tests/05-nixos-vm.sh
+        run: bash -n tests/05-nixos-vm.sh && echo "Syntax OK"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 4: Full VM test — self-hosted runner with KVM + Nix
+  # Triggered manually (workflow_dispatch) or on main push
+  # Runner label: [self-hosted, nixos, kvm]
+  # ─────────────────────────────────────────────────────────────────────────
+  nixos-vm-install:
+    name: Full VM Install (nixos-anywhere)
+    runs-on: [self-hosted, nixos, kvm]
+    needs: [nixos-eval, security-assertions]
+    if: |
+      github.event_name == 'workflow_dispatch' && inputs.run_vm_test == true ||
+      github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    strategy:
+      matrix:
+        profile: [server]   # laptop excluded: NVMe-specific, test server first
+      fail-fast: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify KVM available
+        run: |
+          [ -e /dev/kvm ] || (echo "KVM not available on this runner" && exit 1)
+          echo "KVM available"
+
+      - name: Run full VM test (eval + vm mode)
+        env:
+          TEST_MODE: vm
+          PROFILE: ${{ matrix.profile }}
+          DISK_SIZE: 20G
+          VM_RAM: 4096
+          LUKS_PASS: ${{ secrets.NIXOS_TEST_LUKS_PASS }}
+        run: |
+          chmod +x tests/05-nixos-vm.sh
+          tests/05-nixos-vm.sh
+
+      - name: Upload VM logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-logs-${{ matrix.profile }}
+          path: tests/.vm-nixos/
+          retention-days: 7
