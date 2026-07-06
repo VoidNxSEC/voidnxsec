@@ -85,9 +85,6 @@
     { domain = "*"; type = "hard"; item = "nofile"; value = "65535"; }
   ];
 
-  # --- Disable SUID binaries where possible ---
-  security.wrappers = { };
-
   # --- fail2ban (Lynis recommendation) ---
   services.fail2ban = {
     enable = true;

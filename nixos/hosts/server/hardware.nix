@@ -13,5 +13,8 @@
   boot.kernelModules = [ "kvm-intel" "kvm-amd" ];
   boot.extraModulePackages = [ ];
 
+  # Server: ESP at /boot/efi, ext4 /boot is separate
+  boot.loader.efi.efiSysMountPoint = "/boot/efi";
+
   nixpkgs.hostPlatform = "x86_64-linux";
 }

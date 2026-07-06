@@ -13,30 +13,25 @@
     cryptsetup
     tpm2-tools
     sbctl
-    # Laptop essentials
     brightnessctl
     acpi
     powertop
   ];
 
-  # Hibernate support (requires swap >= RAM size)
-  boot.kernelParams = [ "resume_offset=0" ]; # update offset after install
+  # resume_offset: update after install with:
+  #   filefrag -v /persist/.swapfile | awk 'NR==4{print $4}'
+  # (or run enroll-tpm.sh which prints the correct value)
+  boot.kernelParams = [ "resume_offset=0" ];
 
-  # Screen lock on suspend
+  # All lid/power/idle actions in one place (suspend.nix owns systemd.sleep)
   services.logind = {
     lidSwitch = "suspend-then-hibernate";
-    lidSwitchExternalPower = "lock";
+    lidSwitchExternalPower = "suspend";
     extraConfig = ''
-      IdleAction=suspend-then-hibernate
+      IdleAction=lock
       IdleActionSec=10min
       HibernateDelaySec=60min
+      HandlePowerKey=hibernate
     '';
   };
-
-  # NetworkManager for wifi (iwd backend — faster, lighter)
-  networking.networkmanager = {
-    enable = true;
-    wifi.backend = "iwd";
-  };
-  networking.wireless.iwd.enable = true;
 }

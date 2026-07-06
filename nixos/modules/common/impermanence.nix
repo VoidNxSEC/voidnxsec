@@ -36,6 +36,7 @@
       "/var/lib/auditd"         # auditd state
       "/etc/secureboot"         # Lanzaboote signing keys
       "/etc/ssh"                # SSH host keys (needed for sops-nix decrypt)
+      "/var/lib/aide"           # AIDE integrity database (server monitoring)
     ];
     files = [
       "/etc/machine-id"         # stable machine identity

@@ -19,13 +19,10 @@
       "root-password" = {
         neededForUsers = true;
       };
-      # SSH host key (persisted via impermanence)
-      "ssh-host-ed25519-key" = {
-        path = "/persist/etc/ssh/ssh_host_ed25519_key";
-        mode = "0600";
-        owner = "root";
-        group = "root";
-      };
+      # Note: SSH host key is NOT a sops secret.
+      # services.openssh.hostKeys (in server/services.nix) generates and manages
+      # /persist/etc/ssh/ssh_host_ed25519_key. sops uses that EXISTING key as input
+      # to derive the age decryption key — no circular dependency.
     };
   };
 }

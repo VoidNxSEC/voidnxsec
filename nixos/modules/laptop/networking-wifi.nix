@@ -1,25 +1,21 @@
 { ... }:
-# Laptop WiFi: NetworkManager + iwd backend + DNS over TLS
+# Laptop WiFi: NetworkManager + iwd backend + MAC randomization
 {
   networking.networkmanager = {
     enable = true;
     wifi = {
       backend = "iwd";
-      macAddress = "random";        # MAC randomization per network
+      macAddress = "random";
       powersave = true;
     };
     dns = "systemd-resolved";
-    # Disable insecure connection types
-    connectionConfig = {
-      "connection.auth-retries" = 3;
-    };
   };
 
   networking.wireless.iwd = {
     enable = true;
     settings = {
       General = {
-        AddressRandomization = "network"; # stable per-network random MAC
+        AddressRandomization = "network";
         EnableNetworkConfiguration = false; # let NM handle it
       };
       Network = {
@@ -29,7 +25,7 @@
     };
   };
 
-  # Firewall: more open than server (allow mDNS for local discovery)
+  # Firewall: allow mDNS for local discovery (stricter than server)
   services.avahi = {
     enable = true;
     nssmdns4 = true;
