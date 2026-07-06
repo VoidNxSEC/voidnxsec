@@ -59,8 +59,11 @@ validate_config() {
     # Check if in automated mode
     if [[ -z "$ROOT_PASS" || -z "$USER_PASS" || -z "$LUKS_PASS" ]]; then
         error "For automated installation, all passwords must be set:"
+        # shellcheck disable=SC2317
         error "  export ROOT_PASS='your_root_password'"
+        # shellcheck disable=SC2317
         error "  export USER_PASS='your_user_password'"
+        # shellcheck disable=SC2317
         error "  export LUKS_PASS='your_luks_password'"
     fi
     

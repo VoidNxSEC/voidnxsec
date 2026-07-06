@@ -65,6 +65,7 @@ hits=$(grep -nE 'void_crypt|void-vg|/dev/void-vg' "$SCRIPT_UNDER_TEST" \
        | awk -F: '{ line=$0; sub(/^[0-9]+:/, "", line); if (line !~ /^[[:space:]]*#/) print $0 }')
 if [[ -n "$hits" ]]; then
     fail "void_crypt or void-vg still referenced in code (regression of fix #1/#2/#18)"
+    # shellcheck disable=SC2001
     echo "$hits" | sed 's/^/      /'
 else
     pass "no stale void_crypt / void-vg references in code"
@@ -86,6 +87,7 @@ fi
 
 # 7. trap exit_trap should appear before the case statement (regression for fix #7)
 trap_line=$(grep -n '^trap exit_trap EXIT' "$SCRIPT_UNDER_TEST" | head -1 | cut -d: -f1)
+# shellcheck disable=SC2016
 case_line=$(grep -n '^case "${1:-}"' "$SCRIPT_UNDER_TEST" | head -1 | cut -d: -f1)
 if [[ -n "$trap_line" && -n "$case_line" && "$trap_line" -lt "$case_line" ]]; then
     pass "trap registered before case dispatch"

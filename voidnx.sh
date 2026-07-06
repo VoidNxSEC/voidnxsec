@@ -126,6 +126,7 @@ EOF
 }
 
 load_state() {
+    # shellcheck source=/dev/null
     [[ -f "$STATE_FILE" ]] && source "$STATE_FILE" || echo "NO_STATE"
 }
 
@@ -451,7 +452,7 @@ partition_disk() {
 
     # Safety check
     warn "This will DESTROY all data on $DISK!"
-    read -p "Type 'YES' to continue: " confirm
+    read -rp "Type 'YES' to continue: " confirm
     [[ "$confirm" != "YES" ]] && error "Aborted by user"
 
     # Clear disk with wipefs for safety across all partition schemes
@@ -479,6 +480,7 @@ size=${ROOT_SIZE}, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="ROOT"
 type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="HOME"
 SFDISK_EOF
 
+    # shellcheck disable=SC2181
     if [[ $? -ne 0 ]]; then
         error "sfdisk partitioning failed"
     fi

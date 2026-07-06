@@ -34,14 +34,30 @@ echo "Date:     $(date)"
 # ---------------------------------------------------------------------------
 section "Boot environment"
 # ---------------------------------------------------------------------------
-[[ -d /sys/firmware/efi ]] && pass "booted in UEFI mode" || fail "not UEFI (system fell back to BIOS?)"
-[[ -d /sys/firmware/efi/efivars ]] && pass "efivars accessible" || skip "efivars not mounted"
+if [[ -d /sys/firmware/efi ]]; then
+    pass "booted in UEFI mode"
+else
+    fail "not UEFI (system fell back to BIOS?)"
+fi
+if [[ -d /sys/firmware/efi/efivars ]]; then
+    pass "efivars accessible"
+else
+    skip "efivars not mounted"
+fi
 
 # ---------------------------------------------------------------------------
 section "Filesystems and mounts"
 # ---------------------------------------------------------------------------
-mountpoint -q / && pass "/ mounted" || fail "/ not a mountpoint"
-mountpoint -q /boot && pass "/boot mounted" || fail "/boot not mounted"
+if mountpoint -q /; then
+    pass "/ mounted"
+else
+    fail "/ not a mountpoint"
+fi
+if mountpoint -q /boot; then
+    pass "/boot mounted"
+else
+    fail "/boot not mounted"
+fi
 mountpoint -q /boot/efi && pass "/boot/efi mounted" || fail "/boot/efi not mounted"
 mountpoint -q /home && pass "/home mounted" || fail "/home not mounted (LUKS2 unlock failed?)"
 

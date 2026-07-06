@@ -179,6 +179,7 @@ resume_installation() {
         return 1
     fi
     
+    # shellcheck source=/dev/null
     source "$STATE_FILE"
     clear
     echo -e "${CYAN}=== RESUMING INSTALLATION ===${NC}"
@@ -205,6 +206,7 @@ check_status() {
     
     # Load state if exists
     if [[ -f "$STATE_FILE" ]]; then
+        # shellcheck source=/dev/null
         source "$STATE_FILE"
         echo -e "${GREEN}Installation State: $PHASE${NC}"
         echo "Last update: $(date -d @"$TIMESTAMP" '+%Y-%m-%d %H:%M:%S')"
