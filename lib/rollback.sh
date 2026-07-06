@@ -44,8 +44,8 @@ get_nixos_state() {
 
     # Secure Boot state
     local sb_raw
-    sb_raw=$(cat /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null \
-        | xxd -p | tail -c 2 || echo "00")
+    sb_raw=$(xxd -p /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null \
+        | tail -c 2 || echo "00")
     [[ "$sb_raw" == "01" ]] && sb_state="active" || sb_state="inactive"
 
     printf '{"nixos_generation":%s,"boot_default":"%s","tpm_pcr_policy":"7+9","sealed_tpm":%s,"secureboot_state":"%s"}' \

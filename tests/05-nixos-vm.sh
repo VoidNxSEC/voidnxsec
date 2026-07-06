@@ -132,28 +132,41 @@ run_eval_tests() {
     info "Checking Lanzaboote (Secure Boot) enabled..."
     LB=$(nix eval ".#nixosConfigurations.voidnx-${PROFILE}.config.boot.lanzaboote.enable" \
         --no-update-lock-file 2>/dev/null || echo "false")
-    [[ "$LB" == "true" ]] && pass "Lanzaboote enabled on voidnx-$PROFILE" \
-                            || fail "Lanzaboote NOT enabled on voidnx-$PROFILE"
+    if [[ "$LB" == "true" ]]; then
+        pass "Lanzaboote enabled on voidnx-$PROFILE"
+    else
+        fail "Lanzaboote NOT enabled on voidnx-$PROFILE"
+    fi
 
     # 5. Check systemd initrd (required for TPM2)
     info "Checking systemd initrd..."
     SINITRD=$(nix eval ".#nixosConfigurations.voidnx-${PROFILE}.config.boot.initrd.systemd.enable" \
         --no-update-lock-file 2>/dev/null || echo "false")
-    [[ "$SINITRD" == "true" ]] && pass "systemd initrd enabled (TPM2 unlock possible)" \
-                                 || fail "systemd initrd NOT enabled"
+    if [[ "$SINITRD" == "true" ]]; then
+        pass "systemd initrd enabled (TPM2 unlock possible)"
+    else
+        fail "systemd initrd NOT enabled"
+    fi
 
     # 6. Check AppArmor
     info "Checking AppArmor..."
     AA=$(nix eval ".#nixosConfigurations.voidnx-${PROFILE}.config.security.apparmor.enable" \
         --no-update-lock-file 2>/dev/null || echo "false")
-    [[ "$AA" == "true" ]] && pass "AppArmor enabled" || fail "AppArmor NOT enabled"
+    if [[ "$AA" == "true" ]]; then
+        pass "AppArmor enabled"
+    else
+        fail "AppArmor NOT enabled"
+    fi
 
     # 7. Check impermanence root is tmpfs
     info "Checking impermanence (root-as-tmpfs)..."
     ROOTFS=$(nix eval ".#nixosConfigurations.voidnx-${PROFILE}.config.fileSystems.\"/\".fsType" \
         --no-update-lock-file 2>/dev/null | tr -d '"' || echo "unknown")
-    [[ "$ROOTFS" == "tmpfs" ]] && pass "Root filesystem is tmpfs (impermanence active)" \
-                                  || fail "Root filesystem is '$ROOTFS' — expected tmpfs"
+    if [[ "$ROOTFS" == "tmpfs" ]]; then
+        pass "Root filesystem is tmpfs (impermanence active)"
+    else
+        fail "Root filesystem is '$ROOTFS' — expected tmpfs"
+    fi
 
     # 8. Lint scripts
     section "Script Linting"
@@ -268,8 +281,11 @@ run_vm_tests() {
 
         kill "$qemu_pid" 2>/dev/null || true
 
-        $boot_ok && pass "System booted and reached login prompt" \
-                  || fail "System did not reach login prompt within 120s"
+        if $boot_ok; then
+            pass "System booted and reached login prompt"
+        else
+            fail "System did not reach login prompt within 120s"
+        fi
     else
         skip "Boot check skipped (set BOOT_CHECK=1 to enable)"
     fi

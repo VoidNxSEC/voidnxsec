@@ -5,8 +5,6 @@
 # DO NOT use PCR 0 (breaks on firmware updates)
 set -euo pipefail
 
-PHASE="tpm-enroll"
-
 echo "[INFO] Checking prerequisites..."
 
 [[ $EUID -ne 0 ]] && { echo "[FATAL] must run as root"; exit 1; }
@@ -19,7 +17,7 @@ if ! tpm2_getcap properties-fixed 2>/dev/null | grep -q "TPM2_PT_MANUFACTURER"; 
     exit 1
 fi
 
-SB_STATE=$(cat /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | xxd -p | tail -c 2 || echo "00")
+SB_STATE=$(xxd -p /sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c 2>/dev/null | tail -c 2 || echo "00")
 if [[ "$SB_STATE" != "01" ]]; then
     echo "[WARN] Secure Boot does not appear to be active (state: $SB_STATE)"
     echo "[WARN] TPM binding to PCR 7 without active Secure Boot provides weaker guarantees"

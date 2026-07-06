@@ -15,7 +15,7 @@ PID=$$
 
 _emit() {
     local level="$1" phase="$2" msg="$3"
-    local elapsed=$(( ($(date +%s%3N) - $(date -d "$SESSION_START" +%s%3N 2>/dev/null || echo 0)) ))
+    local elapsed=$(( $(date +%s%3N) - $(date -d "$SESSION_START" +%s%3N 2>/dev/null || echo 0) ))
     printf '{"ts":"%s","level":"%s","phase":"%s","msg":"%s","pid":%d,"boot_id":"%s","elapsed_ms":%d}\n' \
         "$(date -Iseconds)" "$level" "$phase" "$msg" "$PID" "$BOOT_ID" "$elapsed" \
         | tee -a "$LOG_FILE"
