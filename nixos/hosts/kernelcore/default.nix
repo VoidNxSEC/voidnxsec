@@ -1,13 +1,14 @@
 { inputs, ... }:
-# kernelcore — laptop host (Intel + RTX 3050, NVMe ~477GB, LUKS1)
+# kernelcore — laptop host (Intel + RTX 3050, NVMe ~477GB)
 # Phase status:
-#   Phase 1 (current): real hardware, voidnxsec hardening, NVIDIA, Tailscale
-#   Phase 2 (next):    Lanzaboote + Secure Boot
-#   Phase 3:           Desktop offload cache + NFS + remote builds
-#   Phase 4:           disko + LUKS2/Argon2id + impermanence (requires reinstall)
+#   Phase 1: real hardware, voidnxsec hardening, NVIDIA, Tailscale        ✅ done
+#   Phase 2: Lanzaboote + Secure Boot + disko LUKS2/Argon2id bootstrap    ✅ current
+#   Phase 3: Desktop offload cache + remote builds (TODO — see profile.nix)
+#   Phase 4: impermanence (root tmpfs + /persist) — requires reinstall
 {
   imports = [
     ./hardware.nix
+    ./partitions.nix                          # disko LUKS2/Argon2id layout
     ./profile.nix                              # NVIDIA overrides, users, sops, tailscale
     ../../modules/common/boot.nix             # kernel hardening (overridden for NVIDIA in profile)
     ../../modules/common/security.nix         # AppArmor, fail2ban, sysctl CIS/ANSSI
@@ -16,7 +17,6 @@
     ../../modules/network/tailscale.nix       # Tailscale mesh VPN
     # NOT imported (Phase 4):
     #   ../../modules/common/impermanence.nix
-    #   ./partitions.nix                      # disko layout (LUKS2 migration)
     # NOT imported (different user — kernelcore, not nx):
     #   ../../modules/common/users.nix
     # secrets.nix replaced by inline sops config in profile.nix

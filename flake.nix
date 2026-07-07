@@ -57,13 +57,14 @@
         nixosConfigurations = {
           # ── Real hardware hosts ───────────────────────────────────────────────
 
-          # Laptop: Intel + RTX 3050, NVMe ~477GB, LUKS1, America/Bahia
-          # Phase 1: hardening + NVIDIA + Tailscale (systemd-boot, no impermanence yet)
+          # Laptop: Intel + RTX 3050, NVMe ~477GB, America/Bahia
+          # Phase 2: Lanzaboote + Secure Boot + disko LUKS2/Argon2id
           kernelcore = nixpkgs.lib.nixosSystem {
             system = "x86_64-linux";
             specialArgs = { inherit inputs; };
             modules = [
-              lanzaboote.nixosModules.lanzaboote  # imported but disabled in profile.nix (Phase 2)
+              disko.nixosModules.disko
+              lanzaboote.nixosModules.lanzaboote
               sops-nix.nixosModules.sops
               ./nixos/hosts/kernelcore/default.nix
             ];

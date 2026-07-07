@@ -1,6 +1,5 @@
 { lib, pkgs, ... }:
-# Laptop suspend/hibernate: TPM2-sealed keys survive sleep safely
-# systemd-cryptenroll PCR policy enforced on resume
+# Laptop suspend/hibernate: LUKS2 passphrase + optional TPM2 via systemd-cryptenroll
 {
   powerManagement.enable = true;
 

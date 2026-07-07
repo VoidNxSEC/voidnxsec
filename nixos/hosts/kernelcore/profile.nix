@@ -36,12 +36,20 @@
     "nvidia.NVreg_EnableGpuFirmware=1"
   ];
 
-  # Lanzaboote NOT yet active — Phase 2 will migrate to Secure Boot
-  # Override boot.nix mkDefault (lanzaboote.enable = mkDefault true)
-  boot.lanzaboote.enable = false;
-  boot.loader.systemd-boot.enable = true;
+  # Lanzaboote + Secure Boot (Phase 2 — active from bootstrap)
+  # boot.nix sets pkiBundle = "/persist/etc/secureboot"; override to /etc/secureboot
+  # because impermanence is Phase 4 (root is not tmpfs yet).
+  # Post-install Secure Boot enrollment (run once as root after first boot):
+  #   sbctl create-keys
+  #   sbctl enroll-keys --microsoft
+  #   reboot → UEFI → enable Secure Boot
+  boot.lanzaboote = {
+    enable = true;
+    pkiBundle = "/etc/secureboot";
+  };
   boot.loader.efi.canTouchEfiVariables = true;
   boot.loader.efi.efiSysMountPoint = "/boot";
+  # systemd-boot.enable is set to false automatically by the lanzaboote module
 
   # Re-enable bluetooth (boot.nix blacklists it for server; laptop needs it)
   boot.blacklistedKernelModules = lib.mkForce [

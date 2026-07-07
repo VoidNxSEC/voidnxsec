@@ -8,7 +8,7 @@
   # When lanzaboote IS enabled, its own module forces systemd-boot off.
   boot.lanzaboote = {
     enable = lib.mkDefault true;
-    pkiBundle = "/persist/etc/secureboot";
+    pkiBundle = lib.mkDefault "/persist/etc/secureboot";
   };
   boot.loader.efi.canTouchEfiVariables = true;
   # efiSysMountPoint is set per-host in hardware.nix:
