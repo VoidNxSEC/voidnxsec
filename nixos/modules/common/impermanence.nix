@@ -4,6 +4,9 @@
 # Only /persist (on LUKS2 encrypted partition) survives reboots
 # Reference: nix-community/impermanence + Anduril defense-grade approach
 {
+  # /persist must be mounted before impermanence binds directories
+  fileSystems."/persist".neededForBoot = true;
+
   # Root filesystem is RAM (tmpfs) — wiped on shutdown
   fileSystems."/" = {
     device = "none";
@@ -21,6 +24,7 @@
   # /var/tmp bound to /tmp (CIS recommendation)
   fileSystems."/var/tmp" = {
     device = "/tmp";
+    fsType = "none";
     options = [ "bind" "nodev" "nosuid" "noexec" ];
   };
 

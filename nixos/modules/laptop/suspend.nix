@@ -5,10 +5,10 @@
   powerManagement.enable = true;
 
   # systemd-sleep config (logind triggers are in profile.nix)
-  systemd.sleep.extraConfig = ''
-    HibernateDelaySec=60min
-    SuspendState=mem
-  '';
+  systemd.sleep.settings.Sleep = {
+    HibernateDelaySec = "60min";
+    SuspendState = "mem";
+  };
 
   # Bluetooth — enable on laptop (override blacklist from common boot.nix)
   boot.blacklistedKernelModules = lib.mkForce [

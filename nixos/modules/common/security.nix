@@ -11,7 +11,6 @@
   # --- Audit subsystem (ANSSI mandatory from Intermediary level) ---
   security.audit.enable = true;
   security.auditd.enable = true;
-  services.auditd.enable = true;
 
   # --- sysctl: kernel hardening ---
   boot.kernel.sysctl = {

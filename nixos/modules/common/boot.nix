@@ -2,17 +2,18 @@
 # Boot hardening: Lanzaboote (Secure Boot) + TPM2 + hardened kernel params
 # References: NSA/CISA, CIS Level 2, NixOS Lanzaboote docs (2026)
 {
-  # Lanzaboote replaces systemd-boot for Secure Boot support
+  # Lanzaboote replaces systemd-boot for Secure Boot support.
+  # mkDefault = true so hosts without Secure Boot (e.g. kernelcore Phase 1)
+  # can override with `boot.lanzaboote.enable = false` in their profile.
+  # When lanzaboote IS enabled, its own module forces systemd-boot off.
   boot.lanzaboote = {
-    enable = true;
+    enable = lib.mkDefault true;
     pkiBundle = "/persist/etc/secureboot";
   };
-  # lanzaboote requires systemd-boot disabled explicitly
-  boot.loader.systemd-boot.enable = lib.mkForce false;
   boot.loader.efi.canTouchEfiVariables = true;
   # efiSysMountPoint is set per-host in hardware.nix:
   #   server: "/boot/efi" (separate /boot partition)
-  #   laptop: "/boot"     (EFI partition is /boot directly)
+  #   laptop/kernelcore: "/boot" (EFI partition is /boot directly)
 
   # systemd initrd required for systemd-cryptenroll (TPM2 unlock)
   boot.initrd.systemd.enable = true;
@@ -54,8 +55,9 @@
     "kernel.dmesg_restrict" = 1;
   };
 
-  # Use latest hardened kernel
-  boot.kernelPackages = pkgs.linuxPackages_hardened;
+  # linuxPackages_hardened removed from nixpkgs-unstable (lack of maintenance).
+  # Use latest kernel — hardening applied via kernelParams + sysctl above.
+  boot.kernelPackages = pkgs.linuxPackages_latest;
 
   # Disable unnecessary kernel features
   boot.blacklistedKernelModules = [

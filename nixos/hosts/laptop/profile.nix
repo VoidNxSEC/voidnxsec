@@ -24,14 +24,12 @@
   boot.kernelParams = [ "resume_offset=0" ];
 
   # All lid/power/idle actions in one place (suspend.nix owns systemd.sleep)
-  services.logind = {
-    lidSwitch = "suspend-then-hibernate";
-    lidSwitchExternalPower = "suspend";
-    extraConfig = ''
-      IdleAction=lock
-      IdleActionSec=10min
-      HibernateDelaySec=60min
-      HandlePowerKey=hibernate
-    '';
+  services.logind.settings.Login = {
+    HandleLidSwitch = "suspend-then-hibernate";
+    HandleLidSwitchExternalPower = "suspend";
+    IdleAction = "lock";
+    IdleActionSec = "10min";
+    HibernateDelaySec = "60min";
+    HandlePowerKey = "hibernate";
   };
 }

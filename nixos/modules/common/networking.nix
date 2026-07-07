@@ -9,8 +9,8 @@
     # Drop all incoming by default; allow only what's explicitly opened
     allowedTCPPorts = [ ];
     allowedUDPPorts = [ ];
-    # Block ICMP flood
-    pingLimit = "--limit 1/minute --limit-burst 5";
+    # Block ICMP flood (nftables rate syntax)
+    pingLimit = "1/minute";
     # Log dropped packets for audit
     logRefusedConnections = true;
     logRefusedPackets = true;
@@ -19,12 +19,12 @@
   # DNS over TLS via systemd-resolved (ANSSI recommendation)
   services.resolved = {
     enable = true;
-    dnssec = "true";
-    domains = [ "~." ];
-    fallbackDns = [ "1.1.1.1#cloudflare-dns.com" "9.9.9.9#dns.quad9.net" ];
-    extraConfig = ''
-      DNSOverTLS=yes
-    '';
+    settings.Resolve = {
+      DNSSEC = "true";
+      Domains = "~.";
+      FallbackDNS = "1.1.1.1#cloudflare-dns.com 9.9.9.9#dns.quad9.net";
+      DNSOverTLS = "yes";
+    };
   };
 
   # Disable IPv6 router advertisements (already in sysctl but belt-and-suspenders)

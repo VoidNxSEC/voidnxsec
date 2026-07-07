@@ -24,7 +24,6 @@
   ];
 
   # No sound
-  sound.enable = false;
   hardware.pulseaudio.enable = false;
 
   # Disable unnecessary services

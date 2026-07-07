@@ -1,5 +1,5 @@
 { pkgs, ... }:
-# Server monitoring: systemd-journal + optional prometheus node exporter
+# Server monitoring: systemd-journal + AIDE integrity check
 {
   # Persistent journal (survives reboot via /persist/var/log)
   services.journald.extraConfig = ''
@@ -10,19 +10,17 @@
   '';
 
   # AIDE: filesystem integrity monitoring (Lynis recommendation)
-  # Checks for unauthorized file modifications
-  services.aide = {
-    enable = true;
-    settings = {
-      database_in = "file:/var/lib/aide/aide.db";
-      database_out = "file:/var/lib/aide/aide.db.new";
-    };
-  };
+  # No NixOS service module — configure via systemd timer manually after install:
+  #   aide --init && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+  #   aide --check
+  systemd.tmpfiles.rules = [
+    "d /var/lib/aide 0700 root root -"
+  ];
 
   environment.systemPackages = with pkgs; [
     aide
     lynis
-    nmap    # network audit
-    openssl # cert validation
+    nmap
+    openssl
   ];
 }

@@ -55,6 +55,34 @@
 
       flake = {
         nixosConfigurations = {
+          # ── Real hardware hosts ───────────────────────────────────────────────
+
+          # Laptop: Intel + RTX 3050, NVMe ~477GB, LUKS1, America/Bahia
+          # Phase 1: hardening + NVIDIA + Tailscale (systemd-boot, no impermanence yet)
+          kernelcore = nixpkgs.lib.nixosSystem {
+            system = "x86_64-linux";
+            specialArgs = { inherit inputs; };
+            modules = [
+              lanzaboote.nixosModules.lanzaboote  # imported but disabled in profile.nix (Phase 2)
+              sops-nix.nixosModules.sops
+              ./nixos/hosts/kernelcore/default.nix
+            ];
+          };
+
+          # Desktop: 1TB offload server — Nix cache + remote builds + NFS models
+          # BLOCKED: fill nixos/hosts/desktop/hardware.nix with real UUIDs first
+          desktop = nixpkgs.lib.nixosSystem {
+            system = "x86_64-linux";
+            specialArgs = { inherit inputs; };
+            modules = [
+              lanzaboote.nixosModules.lanzaboote  # available for Phase 2
+              sops-nix.nixosModules.sops
+              ./nixos/hosts/desktop/default.nix
+            ];
+          };
+
+          # ── Template hosts (nixos-anywhere targets) ───────────────────────────
+
           voidnx-server = nixpkgs.lib.nixosSystem {
             system = "x86_64-linux";
             specialArgs = { inherit inputs; };
