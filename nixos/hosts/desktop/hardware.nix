@@ -28,10 +28,11 @@
   boot.extraModulePackages = [ ];
 
   # PLACEHOLDER — replace with actual UUIDs from: lsblk -f
-  # fileSystems."/" = {
-  #   device = "/dev/disk/by-uuid/REPLACE-WITH-ROOT-UUID";
-  #   fsType = "ext4";
-  # };
+  # Run on the desktop: sudo nixos-generate-config --show-hardware-config
+  fileSystems."/" = {
+    device = "/dev/disk/by-uuid/REPLACE-WITH-ROOT-UUID";
+    fsType = "ext4";
+  };
   # fileSystems."/boot" = {
   #   device = "/dev/disk/by-uuid/REPLACE-WITH-BOOT-UUID";
   #   fsType = "vfat";
