@@ -24,7 +24,7 @@ mkdir -p "$LOG_DIR"
 # ══════════════════════════════════════════════
 _json_escape() {
     # Escapa strings para JSON sem dependências externas
-    local s="\$1"
+    local s="$1"
     s="${s//\\/\\\\}"      # backslash
     s="${s//\"/\\\"}"      # double quote
     s="${s//$'\n'/\\n}"    # newline
@@ -34,9 +34,9 @@ _json_escape() {
 }
 
 _emit_jsonl() {
-    local level="\$1"
-    local phase="\$2"
-    local msg="\$3"
+    local level="$1"
+    local phase="$2"
+    local msg="$3"
     local extra="${4:-}"  # JSON object extra fields (sem chaves externas)
 
     local ts
@@ -101,7 +101,7 @@ _emit_jsonl() {
 CURRENT_PHASE="init"
 
 log_phase() {
-    CURRENT_PHASE="\$1"
+    CURRENT_PHASE="$1"
     _emit_jsonl "STATE" "$CURRENT_PHASE" "Phase started: ${CURRENT_PHASE}"
 }
 
@@ -117,7 +117,7 @@ log_skip()  { _emit_jsonl "SKIP"  "$CURRENT_PHASE" "$1" "${2:-}"; }
 # Command execution com structured output
 # ══════════════════════════════════════════════
 log_cmd() {
-    local description="\$1"; shift
+    local description="$1"; shift
     local cmd_string="$*"
 
     local start_ms
@@ -199,8 +199,8 @@ log_system_snapshot() {
 # ══════════════════════════════════════════════
 _error_handler_jsonl() {
     local exit_code=$?
-    local line_number=\$1
-    local bash_command=\$2
+    local line_number=$1
+    local bash_command=$2
 
     local extra=""
     extra+="\"line\":${line_number}"
