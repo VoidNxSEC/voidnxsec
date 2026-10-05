@@ -45,14 +45,14 @@
     "iommu.strict=1"
   ];
 
-  # Kernel sysctl hardening (see also security.nix for full list)
+  # Kernel sysctl hardening (defaults — security.nix can override)
   boot.kernel.sysctl = {
     # Disable kexec — prevents loading alternative kernels at runtime
-    "kernel.kexec_load_disabled" = 1;
+    "kernel.kexec_load_disabled" = lib.mkDefault 1;
     # Restrict /proc/kallsyms
-    "kernel.kptr_restrict" = 2;
+    "kernel.kptr_restrict" = lib.mkDefault 2;
     # Restrict dmesg to root
-    "kernel.dmesg_restrict" = 1;
+    "kernel.dmesg_restrict" = lib.mkDefault 1;
   };
 
   # linuxPackages_hardened removed from nixpkgs-unstable (lack of maintenance).

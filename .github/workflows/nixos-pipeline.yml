@@ -1,0 +1,233 @@
+# .github/workflows/nixos-pipeline.yml
+# =============================================================================
+# NixOS Pipeline — Full Queue Simulation
+# =============================================================================
+# Simulates the entire bootstrap queue with Nix's own VMs and gates on 100%:
+#
+#   lint                → shellcheck + bash -n (every script, incl. adapters/)
+#   unit                → function-level tests (tests/02-unit.sh)
+#   adapter-dry-run     → runs the Nix adapter pipeline (7 phases) in DRY_RUN,
+#                         validates the JSONL ledger is machine-readable
+#   flake-eval          → nix flake check --no-build + eval of all hosts
+#   security-assertions → hardening options enforced per profile (matrix)
+#   vm-bootstrap        → boots a real NixOS VM (QEMU via the Nix test driver)
+#                         through systemd-boot and asserts every phase outcome:
+#                         LUKS2/Argon2id, mounts, host key, boot entries, params
+#   queue-ok            → final gate: the queue is 100%
+# =============================================================================
+
+name: NixOS Pipeline — Full Queue Simulation
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # 1/7 — Lint: shellcheck + bash -n on every script (tests/01-lint.sh)
+  # ───────────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (shellcheck + bash -n)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+      - name: Run lint suite
+        run: |
+          chmod +x tests/*.sh
+          ./tests/01-lint.sh
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 2/7 — Unit tests (tests/02-unit.sh)
+  # ───────────────────────────────────────────────────────────────────────────
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run unit suite
+        run: |
+          chmod +x tests/*.sh
+          ./tests/02-unit.sh
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 3/7 — Adapter dry-run: executes the 7-phase pipeline without side effects
+  # ───────────────────────────────────────────────────────────────────────────
+  adapter-dry-run:
+    name: Adapter dry-run (7 phases + JSONL ledger)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v14
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Run adapter pipeline (DRY_RUN)
+        run: |
+          chmod +x adapters/nix/install.sh
+          LOG_DIR=/tmp/voidnx-ledger \
+            DRY_RUN=true SKIP_VALIDATION=true \
+            bash adapters/nix/install.sh
+
+      - name: Validate JSONL ledger
+        run: |
+          test -f /tmp/voidnx-ledger/install.jsonl || { echo "FAIL: ledger missing"; exit 1; }
+          jq -e . /tmp/voidnx-ledger/install.jsonl > /dev/null \
+            && echo "PASS: ledger is valid JSONL"
+          for phase in preflight disk-setup mount base-install chroot-setup bootloader finalize; do
+            grep -q "\"phase\":\"$phase\"" /tmp/voidnx-ledger/install.jsonl \
+              && echo "PASS: phase $phase logged" \
+              || { echo "FAIL: phase $phase missing from ledger"; exit 1; }
+          done
+
+      - name: Upload ledger artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: voidnx-ledger
+          path: /tmp/voidnx-ledger/install.jsonl
+          if-no-files-found: error
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 4/7 — Flake eval: all outputs + every host evaluates
+  # ───────────────────────────────────────────────────────────────────────────
+  flake-eval:
+    name: Flake eval (all hosts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v14
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: flake check (no build)
+        run: nix flake check --no-build
+
+      - name: Eval every host
+        run: |
+          for host in kernelcore desktop voidnx-server voidnx-laptop; do
+            nix eval --no-update-lock-file \
+              ".#nixosConfigurations.$host.config.system.build.toplevel.drvPath" \
+              && echo "PASS: $host evaluates"
+          done
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 5/7 — Security assertions per profile (matrix)
+  # ───────────────────────────────────────────────────────────────────────────
+  security-assertions:
+    name: Security assertions
+    runs-on: ubuntu-latest
+    needs: flake-eval
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [server, laptop]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v14
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Lanzaboote enabled
+        run: |
+          val=$(nix eval --no-update-lock-file \
+            .#nixosConfigurations.voidnx-${{ matrix.profile }}.config.boot.lanzaboote.enable)
+          [ "$val" = "true" ] || (echo "FAIL: lanzaboote" && exit 1)
+
+      - name: systemd initrd (TPM2 requirement)
+        run: |
+          val=$(nix eval --no-update-lock-file \
+            .#nixosConfigurations.voidnx-${{ matrix.profile }}.config.boot.initrd.systemd.enable)
+          [ "$val" = "true" ] || (echo "FAIL: systemd initrd" && exit 1)
+
+      - name: Hardened kernel params
+        run: |
+          params=$(nix eval --no-update-lock-file --json \
+            .#nixosConfigurations.voidnx-${{ matrix.profile }}.config.boot.kernelParams)
+          echo "$params" | grep -q pti=on        || (echo "FAIL: pti=on" && exit 1)
+          echo "$params" | grep -q init_on_alloc=1 || (echo "FAIL: init_on_alloc=1" && exit 1)
+          echo "$params" | grep -q vsyscall=none  || (echo "FAIL: vsyscall=none" && exit 1)
+          echo "$params" | grep -q slab_nomerge   || (echo "FAIL: slab_nomerge" && exit 1)
+
+      - name: AppArmor enabled
+        run: |
+          val=$(nix eval --no-update-lock-file \
+            .#nixosConfigurations.voidnx-${{ matrix.profile }}.config.security.apparmor.enable)
+          [ "$val" = "true" ] || (echo "FAIL: apparmor" && exit 1)
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 6/7 — VM bootstrap: the queue simulated inside a Nix-built VM
+  #       Boots through the real bootloader (OVMF/systemd-boot) and asserts
+  #       every adapter phase outcome. QEMU falls back to TCG on GH runners.
+  # ───────────────────────────────────────────────────────────────────────────
+  vm-bootstrap:
+    name: VM bootstrap (QEMU via Nix test driver)
+    runs-on: ubuntu-latest
+    needs: flake-eval
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v14
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Run VM simulation (checks.x86_64-linux.vm-bootstrap)
+        run: |
+          nix build --no-update-lock-file --print-out-paths \
+            .#checks.x86_64-linux.vm-bootstrap
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # 7/7 — Queue gate: the whole queue is 100%
+  # ───────────────────────────────────────────────────────────────────────────
+  queue-ok:
+    name: Queue 100%
+    runs-on: ubuntu-latest
+    needs: [lint, unit, adapter-dry-run, flake-eval, security-assertions, vm-bootstrap]
+    steps:
+      - name: Gate
+        run: |
+          echo "══════════════════════════════════════════════════"
+          echo "  QUEUE STATUS: 100% ✓"
+          echo ""
+          echo "  lint                PASS"
+          echo "  unit                PASS"
+          echo "  adapter-dry-run     PASS (ledger artifact: voidnx-ledger)"
+          echo "  flake-eval          PASS (4 hosts)"
+          echo "  security-assertions PASS (server + laptop)"
+          echo "  vm-bootstrap        PASS (QEMU boot + all phases)"
+          echo "══════════════════════════════════════════════════"

@@ -51,6 +51,12 @@
             sops
           ];
         };
+
+        # Full queue simulation: boots a NixOS VM through the real bootloader
+        # (systemd-boot via OVMF) and asserts the outcome of every adapter
+        # phase — disk-setup (LUKS2/Argon2id roundtrip), mount, base-install,
+        # chroot-setup, bootloader, preflight. See tests/nixos-vm-test.nix.
+        checks.vm-bootstrap = pkgs.testers.nixosTest (import ./tests/nixos-vm-test.nix { inherit inputs pkgs; });
       };
 
       flake = {
