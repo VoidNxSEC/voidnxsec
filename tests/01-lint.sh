@@ -6,7 +6,7 @@
 init_suite "01 — Static analysis (lint)"
 
 # 1. bash -n on every shell script in the project
-mapfile -t scripts < <(find "$PROJECT_DIR" -maxdepth 2 -type f \
+mapfile -t scripts < <(find "$PROJECT_DIR" -maxdepth 3 -type f \
     \( -name "*.sh" -o -name "voidnx*" \) ! -path "*/.git/*" 2>/dev/null)
 
 if (( ${#scripts[@]} == 0 )); then

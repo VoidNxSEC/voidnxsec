@@ -19,6 +19,12 @@ A ideia maior (Big Picture) é que cada fase da instalação emita eventos JSONL
 
 ```
 voidnxsec/
+├── adapters/
+│   └── nix/               ← NEW: adapter NixOS (pipeline de fases canônico)
+│       ├── install.sh     ← driver (fases, resume/status/debug/clean, rollback)
+│       ├── validators.sh  ← validate_pre/post por fase
+│       └── modules/       ← 00-preflight … 06-finalize
+│
 ├── voidnx.sh              ← Instalador principal Void Linux (1283 linhas)
 ├── voidnx-tui.sh          ← Wrapper TUI menu-driven (323 linhas)
 ├── voidnx-tui.c           ← TUI em C (ncurses) — existe mas não integrado
@@ -194,6 +200,14 @@ AppArmor está **comentado** — o kernel Void padrão não compila com `CONFIG_
 ---
 
 ## Track 2 — NixOS (`scripts/bootstrap-nixos.sh` + `nixos/`)
+
+> ⚠ Este track tem agora uma porta de entrada canônica: o **adapter Nix**
+> (`adapters/nix/install.sh`). Ele implementa o MESMO pipeline de fases do
+> Void (preflight → disk-setup → mount → base-install → chroot-setup →
+> bootloader → finalize) sobre disko + nixos-install, com validators, JSONL
+> ledger, resume e rollback — o contrato está em `docs/adding-a-distro.md`.
+> `scripts/bootstrap-nixos.sh` (nixos-anywhere remoto) e `nixos-bootstrap.sh`
+> continuam existindo como caminhos alternativos.
 
 ### Fluxo de deploy
 
